@@ -185,7 +185,23 @@ function populateTemplate(sheet, template, rows, claim) {
   const currencyHeader = columns.currency && sheet.getRow(template.headerRow).getCell(columns.currency)
   if (currencyHeader) currencyHeader.value = 'Currency'
   if (columns.amount) sheet.getRow(template.headerRow).getCell(columns.amount).value = 'Receipt Amount (as paid)'
-  if (columns.amount) sheet.getRow(totalRow).getCell(columns.amount).value = { formula: `SUM(${sheet.getColumn(columns.amount).letter}${dataStart}:${sheet.getColumn(columns.amount).letter}${dataEnd})` }
+  if (columns.amount) {
+    const amountColumn = sheet.getColumn(columns.amount).letter
+    const receiptCurrencies = rows.map((receipt) => String(receipt.currency || '').trim().toUpperCase())
+    const totalCurrency = receiptCurrencies[0]
+    const hasSingleCurrency = Boolean(totalCurrency) && receiptCurrencies.every((currency) => currency === totalCurrency)
+    if (hasSingleCurrency) {
+      sheet.getRow(totalRow).getCell(columns.amount).value = { formula: `SUM(${amountColumn}${dataStart}:${amountColumn}${dataEnd})` }
+    } else {
+      // The source amounts are in different currencies and cannot be added.
+      // Remove template-provided amount totals (including the header summary cell).
+      const sumFormula = new RegExp(`^SUM\\(\\$?${amountColumn}\\$?\\d+:\\$?${amountColumn}\\$?\\d+\\)$`, 'i')
+      sheet.getColumn(columns.amount).eachCell({ includeEmpty: false }, (cell) => {
+        if (cell.value && typeof cell.value === 'object' && sumFormula.test(cell.value.formula || '')) cell.value = null
+      })
+      sheet.getRow(totalRow).getCell(columns.amount).value = null
+    }
+  }
   if (columns.sgdEquivalent) sheet.getRow(totalRow).getCell(columns.sgdEquivalent).value = { formula: `SUM(${sheet.getColumn(columns.sgdEquivalent).letter}${dataStart}:${sheet.getColumn(columns.sgdEquivalent).letter}${dataEnd})` }
   replaceTemplateSampleIdentity(sheet, claim.displayName)
 }

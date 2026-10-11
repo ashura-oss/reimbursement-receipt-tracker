@@ -22,7 +22,7 @@ Controllers handle HTTP validation and response envelopes. Models contain databa
 - Frankfurter for free currency exchange rates
 - ExcelJS, docx, and pdf-lib for report files
 
-The current implementation has no Luna or other AI dependency. Receipt amounts are entered manually by the user, which keeps the saved claim data reviewable and deterministic.
+Receipt amounts are entered manually by the user, and the entered values are saved with each claim.
 
 ## Project structure
 

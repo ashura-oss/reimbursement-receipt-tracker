@@ -187,6 +187,50 @@ describe('report internals', () => {
     await fs.rm(templatePath, { force: true })
   }, 15000)
 
+  it('does not total mixed-currency receipt amounts while keeping each receipt and SGD total', async () => {
+    const { workbook } = await makeTemplate()
+    const templatePath = temporaryTemplatePath('mixed-currency-template')
+    await workbook.xlsx.writeFile(templatePath)
+    process.env.EXCEL_TEMPLATE_PATH = templatePath
+    const rows = [
+      { ...baseReceipt(1, null, null), amount: 12.34, currency: 'SGD', exchangeRate: 1, sgdEquivalent: 12.34 },
+      { ...baseReceipt(2, null, null), amount: 100, currency: 'INR', exchangeRate: 0.016, sgdEquivalent: 1.6 },
+    ]
+    const bytes = await reportInternals.buildExcel(rows, claim)
+    const ExcelJS = (await import('exceljs')).default
+    const output = new ExcelJS.Workbook(); await output.xlsx.load(bytes)
+    const sheet = output.worksheets[0]
+    expect(sheet.getCell('K21').value).toBe(12.34)
+    expect(sheet.getCell('M21').value).toBe('SGD')
+    expect(sheet.getCell('K22').value).toBe(100)
+    expect(sheet.getCell('M22').value).toBe('INR')
+    expect(sheet.getCell('K10').value).toBeNull()
+    expect(sheet.getCell('K50').value).toBeNull()
+    expect(sheet.getCell('O50').value.formula).toBe('SUM(O21:O49)')
+    await fs.rm(templatePath, { force: true })
+  })
+
+  it('keeps the original-amount total when every receipt uses the same currency', async () => {
+    const { workbook } = await makeTemplate()
+    const templatePath = temporaryTemplatePath('single-currency-template')
+    await workbook.xlsx.writeFile(templatePath)
+    process.env.EXCEL_TEMPLATE_PATH = templatePath
+    const rows = [
+      { ...baseReceipt(1, null, null), amount: 12.34, currency: 'SGD', sgdEquivalent: 12.34 },
+      { ...baseReceipt(2, null, null), amount: 5.66, currency: 'SGD', sgdEquivalent: 5.66 },
+    ]
+    const bytes = await reportInternals.buildExcel(rows, claim)
+    const ExcelJS = (await import('exceljs')).default
+    const output = new ExcelJS.Workbook(); await output.xlsx.load(bytes)
+    const sheet = output.worksheets[0]
+    expect(sheet.getCell('K21').value).toBe(12.34)
+    expect(sheet.getCell('K22').value).toBe(5.66)
+    expect(sheet.getCell('K10').value.formula).toBe('SUM(K21:K49)')
+    expect(sheet.getCell('K50').value.formula).toBe('SUM(K21:K49)')
+    expect(sheet.getCell('O50').value.formula).toBe('SUM(O21:O49)')
+    await fs.rm(templatePath, { force: true })
+  })
+
   it('fails clearly when a configured private template cannot be read', async () => {
     process.env.EXCEL_TEMPLATE_STORAGE_KEY = 'private/missing-template.xlsx'
     await expect(reportInternals.buildExcel([], claim)).rejects.toMatchObject({ code: 'REPORT_TEMPLATE_UNAVAILABLE' })

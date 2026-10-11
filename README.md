@@ -13,7 +13,7 @@ The app lets a user photograph a receipt, enter the amount, choose a currency an
 
 The backend follows the BED course structure: routes mount controllers, controllers handle HTTP validation and response envelopes, models contain Drizzle queries, and services contain exchange-rate, storage, and report workflows. Admin routes are prepared but disabled by default with `ADMIN_PORTAL_ENABLED=false`.
 
-The first release has no Luna integration. Receipt amounts are entered manually. Frankfurter supplies date-scoped exchange rates, and the exact rate used is saved with each receipt.
+Receipt amounts are entered manually. Frankfurter supplies date-scoped exchange rates, and the exact rate used is saved with each receipt.
 
 The backend uses SQLite by default for local development. The planned production host is Azure App Service on Linux (Basic B1), Azure Database for PostgreSQL Flexible Server (Burstable B1ms, 32 GiB), and a private Azure Blob container with managed-identity access. Deployment and PostgreSQL migration instructions are in [backend/infra/README.md](backend/infra/README.md). Container Apps artifacts remain optional experiments.
 
