@@ -2,18 +2,36 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { PDFDocument } from 'pdf-lib'
 import { buildTestPng, buildTestJpeg } from './testImageFixtures.js'
-import { reportInternals } from './reportService.js'
-import { getStorageProvider, getStorageRoot, removeFile, saveBuffer } from './storageService.js'
+import { randomUUID } from 'node:crypto'
+
+const testRunId = randomUUID()
+const databaseFile = path.join(os.tmpdir(), `report-service-${testRunId}.db`)
+const storageDirectory = path.join(os.tmpdir(), `report-service-storage-${testRunId}`)
+process.env.NODE_ENV = 'test'
+process.env.DATABASE_PROVIDER = 'sqlite'
+process.env.DATABASE_URL = `file:${databaseFile.replaceAll('\\', '/')}`
+process.env.STORAGE_PROVIDER = 'local'
+process.env.STORAGE_DIR = storageDirectory
+
+const [{ reportInternals }, database, schema, storage] = await Promise.all([
+  import('./reportService.js'),
+  import('../db/db.js'),
+  import('../db/schema.js'),
+  import('./storageService.js'),
+])
+const { db, client, closeDatabase } = database
+const { removeFile, saveBuffer } = storage
 
 const baseReceipt = (id, storageKey, mimeType) => ({ id, receiptDate: new Date('2026-10-11T00:00:00Z'), amount: 10 + id, currency: 'SGD', exchangeRate: 1, sgdEquivalent: 10 + id, description: `Receipt ${id} with a long description that wraps`, categoryName: 'IT', storageKey, mimeType })
 const claim = { title: 'Test claim', status: 'DRAFT', displayName: 'Alice Example', startDate: new Date('2026-10-01T00:00:00Z'), endDate: new Date('2026-10-11T00:00:00Z') }
 let originalTemplatePath
 let originalTemplateStorageKey
+let otherUserId
+let ownerClaimId
 const cleanupKeys = []
-const testRunId = randomUUID()
 const temporaryTemplateFiles = new Set()
 const temporaryTemplatePath = (name) => {
   const file = path.join(os.tmpdir(), `${name}-${testRunId}.xlsx`)
@@ -38,6 +56,49 @@ async function makeTemplate() {
   sheet.getCell('O52').value = { formula: 'O50+O51' }
   return { workbook, sheet }
 }
+
+async function createOwnershipTables() {
+  await client.execute(`CREATE TABLE users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'USER',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  )`)
+  await client.execute(`CREATE TABLE claims (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    title TEXT NOT NULL,
+    start_date INTEGER,
+    end_date INTEGER,
+    status TEXT NOT NULL DEFAULT 'DRAFT',
+    total_amount REAL NOT NULL DEFAULT 0,
+    total_sgd_equivalent REAL NOT NULL DEFAULT 0,
+    submitted_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  )`)
+  const now = new Date()
+  const people = await db.insert(schema.users).values([
+    { username: `report-owner-${testRunId}`, displayName: 'Report Owner', passwordHash: 'unused', createdAt: now, updatedAt: now },
+    { username: `report-other-${testRunId}`, displayName: 'Other User', passwordHash: 'unused', createdAt: now, updatedAt: now },
+  ]).returning({ id: schema.users.id })
+  otherUserId = people[1].id
+  const [ownerClaim] = await db.insert(schema.claims).values({
+    userId: people[0].id,
+    title: 'Owned fixture claim',
+    status: 'DRAFT',
+    createdAt: now,
+    updatedAt: now,
+  }).returning({ id: schema.claims.id })
+  ownerClaimId = ownerClaim.id
+}
+
+beforeAll(async () => {
+  await createOwnershipTables()
+})
 
 beforeEach(() => {
   originalTemplatePath = process.env.EXCEL_TEMPLATE_PATH
@@ -145,13 +206,14 @@ describe('report internals', () => {
 
 afterAll(async () => {
   await Promise.all([...temporaryTemplateFiles].map((file) => fs.rm(file, { force: true }).catch(() => {})))
-  if (getStorageProvider() === 'local') {
-    await fs.rm(path.join(getStorageRoot(), 'test-report', testRunId), { recursive: true, force: true }).catch(() => {})
-  }
+  await Promise.all(cleanupKeys.splice(0).map(removeFile))
+  await closeDatabase()
+  await Promise.all([databaseFile, `${databaseFile}-shm`, `${databaseFile}-wal`].map((file) => fs.rm(file, { force: true }).catch(() => {})))
+  await fs.rm(storageDirectory, { recursive: true, force: true }).catch(() => {})
 })
 
 describe('report ownership', () => {
   it('rejects a claim that is not owned by the caller', async () => {
-    await expect(reportInternals.claimRows(999999, 1)).rejects.toMatchObject({ statusCode: 404, message: 'Claim not found' })
+    await expect(reportInternals.claimRows(otherUserId, ownerClaimId)).rejects.toMatchObject({ statusCode: 404, message: 'Claim not found' })
   })
 })
