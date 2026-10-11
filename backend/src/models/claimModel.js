@@ -44,9 +44,10 @@ export const getReceipts = async (claimId, userId, tx = db) => tx.select({
   .where(and(eq(claimReceipts.claimId, claimId), eq(claims.userId, userId)))
 
 export const createClaimWithReceipts = async ({ userId, title, startDate, endDate, receiptIds }, tx = db) => {
-  const selected = await tx.select({ id: receipts.id, amount: receipts.amount, sgdEquivalent: receipts.sgdEquivalent })
+  const selected = await tx.select({ id: receipts.id, amount: receipts.amount, sgdEquivalent: receipts.sgdEquivalent, status: receipts.status })
     .from(receipts).where(and(eq(receipts.userId, userId), inArray(receipts.id, receiptIds)))
   if (selected.length !== receiptIds.length) throw new Error('RECEIPT_OWNERSHIP_MISMATCH')
+  if (selected.some((receipt) => receipt.status !== 'UNCLAIMED')) throw new Error('RECEIPT_ALREADY_CLAIMED')
   const totalAmount = selected.reduce((sum, item) => sum + item.amount, 0)
   const totalSgdEquivalent = selected.reduce((sum, item) => sum + item.sgdEquivalent, 0)
   const claimRows = await tx.insert(claims).values({ userId, title, startDate, endDate, totalAmount, totalSgdEquivalent }).returning({ id: claims.id })

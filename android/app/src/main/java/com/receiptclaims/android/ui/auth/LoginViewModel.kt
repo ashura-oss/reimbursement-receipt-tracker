@@ -34,7 +34,7 @@ class LoginViewModel @Inject constructor(
                     val payload = response.data
                     if (payload == null) _state.value = LoginUiState(error = "Login response was empty.")
                     else {
-                        sessionStore.save(payload.token, null)
+                        sessionStore.save(payload.token, null, payload.user.id)
                         _state.value = LoginUiState()
                         onSuccess()
                     }

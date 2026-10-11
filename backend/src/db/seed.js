@@ -1,5 +1,5 @@
 import 'dotenv/config'
-import { db } from './db.js'
+import { closeDatabase, db } from './db.js'
 import * as categoryModel from '../models/categoryModel.js'
 
 const CATEGORY_NAMES = [
@@ -7,8 +7,12 @@ const CATEGORY_NAMES = [
   'Technical Service', 'Warehouse',
 ]
 
-for (const name of CATEGORY_NAMES) {
-  await categoryModel.createIfMissing(name)
-}
+try {
+  for (const name of CATEGORY_NAMES) {
+    await categoryModel.createIfMissing(name)
+  }
 
-console.log(`Seeded ${CATEGORY_NAMES.length} receipt categories.`)
+  console.log(`Seeded ${CATEGORY_NAMES.length} receipt categories.`)
+} finally {
+  await closeDatabase()
+}

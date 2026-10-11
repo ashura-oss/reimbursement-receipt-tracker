@@ -8,26 +8,37 @@
     "start": "node index.js",
     "db": "npm run db:push && npm run db:seed",
     "db:push": "drizzle-kit push --force",
+    "db:generate:postgres": "drizzle-kit generate --config drizzle.pg.config.js",
+    "db:migrate:postgres": "drizzle-kit migrate --config drizzle.pg.config.js",
     "db:seed": "node src/db/seed.js",
+    "db:seed:postgres": "node src/db/seedPostgres.js",
     "test": "vitest run"
   },
   "dependencies": {
+    "@azure/identity": "^4.13.3",
+    "@azure/storage-blob": "^12.26.0",
     "@libsql/client": "^0.15.9",
-    "bcrypt": "^5.1.1",
+    "bcrypt": "^6.0.0",
     "cors": "^2.8.5",
-    "dotenv": "^16.4.7",
-    "drizzle-orm": "^0.38.3",
     "docx": "^9.5.1",
-    "express": "^4.21.2",
+    "dotenv": "^16.4.7",
+    "drizzle-orm": "^0.45.4",
     "exceljs": "^4.4.0",
+    "express": "^4.21.2",
     "jsonwebtoken": "^9.0.2",
-    "multer": "^1.4.5-lts.1"
-    ,"pdf-lib": "^1.17.1"
+    "multer": "^2.4.0",
+    "pdf-lib": "^1.17.1",
+    "postgres": "^3.4.5"
   },
   "devDependencies": {
-    "drizzle-kit": "^0.30.4",
+    "drizzle-kit": "^0.31.11",
     "nodemon": "^3.1.9",
     "supertest": "^7.0.0",
     "vitest": "^2.1.8"
+  },
+  "overrides": {
+    "exceljs": {
+      "uuid": "^11.1.1"
+    }
   }
 }

@@ -31,7 +31,12 @@ export const createClaim = async (req, res) => {
     const uniqueReceiptIds = [...new Set(receiptIds.map(Number))]
     const claim = await db.transaction((tx) => claimModel.createClaimWithReceipts({ userId: res.locals.userId, title: title.trim(), startDate: startDate ? toDate(startDate) : null, endDate: endDate ? toDate(endDate) : null, receiptIds: uniqueReceiptIds }, tx))
     return res.status(201).json({ message: 'Claim created.', data: await shapeClaim(claim, res.locals.userId) })
-  } catch (error) { console.error(error); if (error.message === 'RECEIPT_OWNERSHIP_MISMATCH') return res.status(404).json({ error: 'One or more receipts were not found.' }); return res.status(500).json({ error: 'Internal Server Error' }) }
+  } catch (error) {
+    console.error(error)
+    if (error.message === 'RECEIPT_OWNERSHIP_MISMATCH') return res.status(404).json({ error: 'One or more receipts were not found.' })
+    if (error.message === 'RECEIPT_ALREADY_CLAIMED' || error?.code === '23505' || error?.code === 'SQLITE_CONSTRAINT_UNIQUE' || String(error?.message || '').toLowerCase().includes('unique constraint')) return res.status(409).json({ error: 'One or more receipts have already been claimed.' })
+    return res.status(500).json({ error: 'Internal Server Error' })
+  }
 }
 
 export const submitClaim = async (req, res) => {

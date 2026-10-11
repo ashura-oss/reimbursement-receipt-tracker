@@ -11,6 +11,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -35,15 +38,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import java.time.LocalDate
+import java.time.format.DateTimeParseException
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddReceiptScreen(onBack: () -> Unit, onSaved: () -> Unit, viewModel: ReceiptViewModel = hiltViewModel()) {
     val context = LocalContext.current
     val categories by viewModel.categories.collectAsStateWithLifecycle()
+    val saveState by viewModel.saveState.collectAsStateWithLifecycle()
     var amount by remember { mutableStateOf("") }
     var currency by remember { mutableStateOf("SGD") }
     var receiptDate by remember { mutableStateOf(LocalDate.now().toString()) }
@@ -74,13 +81,13 @@ fun AddReceiptScreen(onBack: () -> Unit, onSaved: () -> Unit, viewModel: Receipt
         )
     }) { padding ->
         Column(
-            modifier = Modifier.fillMaxSize().padding(padding).padding(24.dp),
+            modifier = Modifier.fillMaxSize().padding(padding).padding(24.dp).verticalScroll(rememberScrollState()).imePadding(),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             OutlinedButton(onClick = { requestCamera.launch(Manifest.permission.CAMERA) }, modifier = Modifier.fillMaxWidth()) { Text("Take photo") }
             OutlinedButton(onClick = { pickImage.launch(PickVisualMediaRequest(PickVisualMedia.ImageOnly)) }, modifier = Modifier.fillMaxWidth()) { Text("Choose from gallery") }
             Text(if (sourceUri == null) "No receipt image selected" else "Receipt image selected")
-            OutlinedTextField(amount, { amount = it }, label = { Text("Amount") }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(amount, { amount = it }, label = { Text("Amount") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.fillMaxWidth())
             ExposedDropdownMenuBox(expanded = currencyMenuOpen, onExpandedChange = { currencyMenuOpen = !currencyMenuOpen }) {
                 OutlinedTextField(currency, {}, readOnly = true, label = { Text("Currency") }, trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(currencyMenuOpen) }, modifier = Modifier.menuAnchor().fillMaxWidth())
                 DropdownMenu(expanded = currencyMenuOpen, onDismissRequest = { currencyMenuOpen = false }) {
@@ -89,7 +96,7 @@ fun AddReceiptScreen(onBack: () -> Unit, onSaved: () -> Unit, viewModel: Receipt
                     }
                 }
             }
-            OutlinedTextField(receiptDate, { receiptDate = it }, label = { Text("Receipt date (YYYY-MM-DD)") }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(receiptDate, { receiptDate = it }, label = { Text("Receipt date (YYYY-MM-DD)") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii), modifier = Modifier.fillMaxWidth())
             ExposedDropdownMenuBox(expanded = categoryMenuOpen, onExpandedChange = { categoryMenuOpen = !categoryMenuOpen }) {
                 val selectedCategory = categories.firstOrNull { it.id == categoryId }
                 OutlinedTextField(selectedCategory?.name ?: "Select classification", {}, readOnly = true, label = { Text("Classification") }, trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(categoryMenuOpen) }, modifier = Modifier.menuAnchor().fillMaxWidth())
@@ -100,18 +107,22 @@ fun AddReceiptScreen(onBack: () -> Unit, onSaved: () -> Unit, viewModel: Receipt
             OutlinedTextField(description, { description = it }, label = { Text("Description (optional)") }, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(note, { note = it }, label = { Text("Note (optional)") }, modifier = Modifier.fillMaxWidth())
             error?.let { Text(it) }
+            saveState.error?.let { Text(it) }
             Button(
+                enabled = !saveState.saving,
                 onClick = {
                     val parsedAmount = amount.toBigDecimalOrNull()
+                    val validDate = runCatching { LocalDate.parse(receiptDate.trim()) }.isSuccess
                     when {
                         sourceUri == null -> error = "Add a receipt image first."
                         parsedAmount == null || parsedAmount <= java.math.BigDecimal.ZERO -> error = "Enter a valid amount."
+                        !validDate -> error = "Enter a valid date as YYYY-MM-DD."
                         categoryId == null -> error = "Choose a classification."
                         else -> viewModel.saveReceipt(amount.trim(), currency, receiptDate.trim(), categoryId!!, description.trim().ifBlank { null }, note.trim().ifBlank { null }, sourceUri!!, onSaved)
                     }
                 },
                 modifier = Modifier.fillMaxWidth()
-            ) { Text("Save receipt") }
+            ) { Text(if (saveState.saving) "Saving…" else "Save receipt") }
         }
     }
 }

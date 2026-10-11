@@ -1,7 +1,7 @@
 import { desc, eq } from 'drizzle-orm'
 import { db } from '../db/db.js'
 import { claimReceipts, claims, receiptCategories, receipts, reportFiles, reports, users } from '../db/schema.js'
-import { getFilePath } from '../services/storageService.js'
+import { readBuffer } from '../services/storageService.js'
 
 const userColumns = { id: users.id, username: users.username, displayName: users.displayName, role: users.role, createdAt: users.createdAt }
 const claimColumns = { id: claims.id, userId: claims.userId, title: claims.title, startDate: claims.startDate, endDate: claims.endDate, status: claims.status, totalAmount: claims.totalAmount, totalSgdEquivalent: claims.totalSgdEquivalent, submittedAt: claims.submittedAt, createdAt: claims.createdAt, updatedAt: claims.updatedAt }
@@ -37,7 +37,7 @@ export const getReceiptImage = async (req, res) => {
     if (!Number.isInteger(receiptId)) return res.status(400).json({ error: 'Receipt id must be an integer.' })
     const [receipt] = await db.select({ storageKey: receipts.storageKey, mimeType: receipts.mimeType }).from(receipts).where(eq(receipts.id, receiptId)).limit(1)
     if (!receipt?.storageKey) return res.status(404).json({ error: 'Receipt image not found.' })
-    const imagePath = await getFilePath(receipt.storageKey)
-    return res.type(receipt.mimeType || 'application/octet-stream').sendFile(imagePath)
+    const imageBuffer = await readBuffer(receipt.storageKey)
+    return res.type(receipt.mimeType || 'application/octet-stream').send(imageBuffer)
   } catch (error) { console.error(error); return res.status(404).json({ error: 'Receipt image not found.' }) }
 }

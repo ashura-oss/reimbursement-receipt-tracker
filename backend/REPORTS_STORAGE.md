@@ -2,7 +2,7 @@
 
 ## Storage
 
-`src/services/storageService.js` is the provider boundary. The current provider writes private files under `STORAGE_DIR` (default `backend/storage`). Receipt controllers use `saveReceiptImage` and `deleteStorageObject`; changing those functions to an Azure Blob adapter does not change route code. Storage keys are normalized and traversal is rejected.
+`src/services/storageService.js` is the provider boundary. Local development writes private files under `STORAGE_DIR` (default `backend/storage`). Set `STORAGE_PROVIDER=azure` with `AZURE_STORAGE_ACCOUNT_URL` and a managed identity (or use `AZURE_STORAGE_CONNECTION_STRING` for local Azure testing) to store blobs privately. Receipt controllers use `saveReceiptImage` and `deleteStorageObject`; route code does not change between providers. Storage keys are normalized and traversal is rejected.
 
 ## Exchange rates
 
@@ -10,7 +10,7 @@
 
 ## Reports
 
-`reportService.generateClaimReport` generates Excel, Word, and PDF files and records each file in `report_files`. It reads the receipts linked to a claim, preserving each receipt image in the Word/PDF outputs. Set `EXCEL_TEMPLATE_PATH` to use the supplied workbook as the base. The adapter finds the header row containing `Amount Excluding GST` and maps common headers such as Currency, Exchange Rate, and S$ Equivalent; if no template is configured, it creates a clean `Expense Claim` workbook.
+`reportService.generateClaimReport` generates Excel, Word, and PDF files and records each file in `report_files`. It reads the receipts linked to a claim, preserving each receipt image in the Word/PDF outputs. Set `EXCEL_TEMPLATE_PATH` to use a local workbook as the base, or `EXCEL_TEMPLATE_STORAGE_KEY` to load a private workbook through the configured storage provider (the Azure deployment passes this key so the workbook does not need to be committed into the image). The adapter finds the row-20 claim table in the Vadi template, maps `No`, `Date`, `Accounts Code`, `Description`, `Amount Excluding GST`, currency, `Exchange Rate`, `S$ Equivalent`, and `Cost centre 2`, expands the data region when a claim exceeds the sample rows, and updates totals and downstream formulas. If a configured template cannot be read or does not contain that table, generation fails with a clear template error; if no template is configured, it creates a clean `Expense Claim` workbook.
 
 Report metadata is available at `GET /api/reports/:id`; files are downloaded through the user-scoped `GET /api/report-files/:id/download` route.
 

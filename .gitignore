@@ -18,6 +18,7 @@ backend/storage/*
 **/.gradle/
 **/local.properties
 **/captures/
+android/*.png
 **/*.keystore
 **/*.jks
 

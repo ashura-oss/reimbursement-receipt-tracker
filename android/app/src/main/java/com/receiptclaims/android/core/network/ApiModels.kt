@@ -2,6 +2,7 @@ package com.receiptclaims.android.core.network
 
 data class ApiEnvelope<T>(val message: String? = null, val data: T? = null)
 data class LoginRequest(val username: String, val password: String)
+data class RegisterRequest(val username: String, val password: String, val displayName: String)
 data class LoginPayload(val token: String, val user: UserDto)
 data class UserDto(val id: Int, val username: String, val displayName: String? = null, val role: String = "USER")
 data class CategoryDto(val id: Int, val name: String)
@@ -22,10 +23,12 @@ data class ReceiptDto(
 data class ClaimDto(
     val id: Int,
     val status: String,
-    val receiptIds: List<String> = emptyList(),
+    val receiptIds: List<String>? = emptyList(),
     val totalSgd: String? = null,
-    val createdAt: String? = null
+    val createdAt: String? = null,
+    val receipts: List<ClaimReceiptDto>? = emptyList()
 )
+data class ClaimReceiptDto(val id: Int)
 data class CreateClaimRequest(
     val title: String,
     val startDate: String? = null,

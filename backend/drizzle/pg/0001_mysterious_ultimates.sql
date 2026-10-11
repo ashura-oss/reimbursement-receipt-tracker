@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "claim_receipt_receipt_unique_idx" ON "claim_receipts" USING btree ("receipt_id");

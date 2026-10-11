@@ -34,6 +34,7 @@ export const getReceipt = async (req, res) => {
 }
 
 export const createReceipt = async (req, res) => {
+  let storedImage = null
   try {
     const { amount: rawAmount, currency: rawCurrency = DEFAULT_CURRENCY, categoryId: rawCategoryId, receiptDate, description, note, clientReceiptId } = req.body || {}
     const amount = parseAmount(rawAmount)
@@ -52,7 +53,7 @@ export const createReceipt = async (req, res) => {
     if (note !== undefined && note !== null && typeof note !== 'string') return res.status(400).json({ error: 'Note must be text.' })
     if (!(await categoryModel.getById(categoryId))) return res.status(400).json({ error: 'Receipt category does not exist.' })
     const rate = await exchangeRateService.getRate(currency, receiptDate)
-    const storedImage = req.file ? await storageService.saveReceiptImage(req.file, { userId: res.locals.userId }) : null
+    storedImage = req.file ? await storageService.saveReceiptImage(req.file, { userId: res.locals.userId }) : null
     const receipt = await receiptModel.createReceipt({
       userId: res.locals.userId, categoryId, receiptDate: toDate(receiptDate), amount, currency,
       exchangeRate: rate, sgdEquivalent: Number((amount * rate).toFixed(2)),
@@ -66,6 +67,16 @@ export const createReceipt = async (req, res) => {
     return res.status(201).json({ message: 'Receipt created.', data: receipt })
   } catch (error) {
     console.error(error)
+    if (storedImage?.storageKey) {
+      try { await storageService.deleteStorageObject(storedImage.storageKey) } catch (cleanupError) { console.error(cleanupError) }
+    }
+    const isUniqueConstraint = error?.code === '23505' || error?.code === 'SQLITE_CONSTRAINT_UNIQUE' || String(error?.message || '').toLowerCase().includes('unique constraint')
+    if (isUniqueConstraint && typeof req.body?.clientReceiptId === 'string') {
+      try {
+        const existing = await receiptModel.getByClientReceiptId(req.body.clientReceiptId.trim(), res.locals.userId)
+        if (existing) return res.status(200).json({ message: 'Receipt already exists.', data: existing })
+      } catch (lookupError) { console.error(lookupError) }
+    }
     return res.status(500).json({ error: 'Internal Server Error' })
   }
 }

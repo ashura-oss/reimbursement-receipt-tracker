@@ -4,15 +4,20 @@ import okhttp3.MultipartBody
 import okhttp3.RequestBody
 import retrofit2.http.Body
 import retrofit2.http.GET
-import retrofit2.http.Header
 import retrofit2.http.Multipart
 import retrofit2.http.POST
 import retrofit2.http.Part
 import retrofit2.http.Path
+import retrofit2.http.Streaming
+import retrofit2.Response
+import okhttp3.ResponseBody
 
 interface ApiService {
     @POST("auth/login")
     suspend fun login(@Body request: LoginRequest): ApiEnvelope<LoginPayload>
+
+    @POST("auth/register")
+    suspend fun register(@Body request: RegisterRequest): ApiEnvelope<UserDto>
 
     @GET("categories")
     suspend fun categories(): ApiEnvelope<List<CategoryDto>>
@@ -20,8 +25,8 @@ interface ApiService {
     @Multipart
     @POST("receipts")
     suspend fun uploadReceipt(
-        @Header("Idempotency-Key") clientReceiptId: String,
         @Part image: MultipartBody.Part,
+        @Part("clientReceiptId") clientReceiptId: RequestBody,
         @Part("amount") amount: RequestBody,
         @Part("currency") currency: RequestBody,
         @Part("receiptDate") receiptDate: RequestBody,
@@ -42,6 +47,14 @@ interface ApiService {
     @GET("claims")
     suspend fun claims(): ApiEnvelope<List<ClaimDto>>
 
+    @GET("claims/{id}")
+    suspend fun claim(@Path("id") claimId: Int): ApiEnvelope<ClaimDto>
+
     @POST("reports/claims/{id}")
     suspend fun generateReport(@Path("id") claimId: Int): ApiEnvelope<ReportDto>
+
+    /** Protected download; the auth interceptor supplies the user's bearer token. */
+    @Streaming
+    @GET("report-files/{id}/download")
+    suspend fun downloadReportFile(@Path("id") fileId: Int): Response<ResponseBody>
 }

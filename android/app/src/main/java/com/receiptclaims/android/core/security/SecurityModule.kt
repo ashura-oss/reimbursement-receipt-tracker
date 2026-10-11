@@ -1,13 +1,10 @@
 package com.receiptclaims.android.core.security
 
 import dagger.Module
-import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 
 @Module
 @InstallIn(SingletonComponent::class)
 object SecurityModule {
-    @Provides
-    fun sessionStore(store: SessionStore): SessionStore = store
 }

@@ -17,7 +17,7 @@ import androidx.compose.ui.unit.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeScreen(onReceipts: () -> Unit, onAddReceipt: () -> Unit, onClaims: () -> Unit) {
+fun HomeScreen(onReceipts: () -> Unit, onAddReceipt: () -> Unit, onClaims: () -> Unit, onLogout: () -> Unit) {
     Scaffold(topBar = { TopAppBar(title = { Text("Receipt claims") }) }) { padding ->
         Column(
             modifier = Modifier.fillMaxSize().padding(padding).padding(24.dp),
@@ -27,6 +27,7 @@ fun HomeScreen(onReceipts: () -> Unit, onAddReceipt: () -> Unit, onClaims: () ->
             Button(onClick = onAddReceipt, modifier = Modifier.fillMaxWidth()) { Text("Add receipt") }
             OutlinedButton(onClick = onReceipts, modifier = Modifier.fillMaxWidth()) { Text("My receipts") }
             OutlinedButton(onClick = onClaims, modifier = Modifier.fillMaxWidth()) { Text("Claims and reports") }
+            OutlinedButton(onClick = onLogout, modifier = Modifier.fillMaxWidth()) { Text("Sign out") }
         }
     }
 }

@@ -6,6 +6,7 @@ import androidx.room.PrimaryKey
 @Entity(tableName = "receipts")
 data class ReceiptEntity(
     @PrimaryKey val clientReceiptId: String,
+    val ownerUserId: Int,
     val serverId: String? = null,
     val amount: String,
     val currency: String = "SGD",
@@ -23,6 +24,7 @@ data class ReceiptEntity(
         const val STATUS_PENDING_UPLOAD = "PENDING_UPLOAD"
         const val STATUS_UPLOADING = "UPLOADING"
         const val STATUS_UPLOADED = "UPLOADED"
+        const val STATUS_CLAIMED = "CLAIMED"
         const val STATUS_FAILED = "FAILED"
     }
 }

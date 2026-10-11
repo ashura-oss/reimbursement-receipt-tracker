@@ -2,6 +2,8 @@ package com.receiptclaims.android.ui.receipts
 
 import android.content.Context
 import android.net.Uri
+import android.graphics.BitmapFactory
+import java.io.ByteArrayOutputStream
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.receiptclaims.android.data.local.CategoryEntity
@@ -27,6 +29,9 @@ class ReceiptViewModel @Inject constructor(
     private val repository: ReceiptRepository,
     private val categoryRepository: CategoryRepository
 ) : ViewModel() {
+    data class SaveState(val saving: Boolean = false, val error: String? = null)
+    private val _saveState = kotlinx.coroutines.flow.MutableStateFlow(SaveState())
+    val saveState: StateFlow<SaveState> = _saveState
     val receipts: StateFlow<List<ReceiptEntity>> = repository.observeReceipts()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val categories: StateFlow<List<CategoryEntity>> = categoryRepository.observeCategories()
@@ -45,20 +50,28 @@ class ReceiptViewModel @Inject constructor(
         onSaved: () -> Unit
     ) {
         viewModelScope.launch {
-            val path = copyToPrivateStorage(sourceUri)
-            val clientId = repository.createDraft(amount, currency, receiptDate, categoryId, description, note, path)
-            UploadScheduler.enqueue(context, clientId)
-            onSaved()
+            _saveState.value = SaveState(saving = true)
+            runCatching {
+                val path = copyToPrivateStorage(sourceUri)
+                val clientId = repository.createDraft(amount, currency, receiptDate, categoryId, description, note, path)
+                UploadScheduler.enqueue(context, clientId)
+            }.onSuccess { _saveState.value = SaveState(); onSaved() }
+                .onFailure { _saveState.value = SaveState(error = it.message ?: "Unable to save receipt.") }
         }
     }
 
     private suspend fun copyToPrivateStorage(sourceUri: Uri): String = withContext(Dispatchers.IO) {
         val output = File(context.filesDir, "receipt-images/${UUID.randomUUID()}.jpg").apply { parentFile?.mkdirs() }
-        if (sourceUri.scheme == "file") File(sourceUri.path!!).inputStream().use { input -> output.outputStream().use(input::copyTo) }
+        val bitmap = if (sourceUri.scheme == "file") File(sourceUri.path!!).inputStream().use(BitmapFactory::decodeStream)
         else context.contentResolver.openInputStream(sourceUri).use { input ->
             requireNotNull(input) { "Unable to read selected image." }
-            output.outputStream().use(input::copyTo)
+            BitmapFactory.decodeStream(input)
         }
+        requireNotNull(bitmap) { "The selected image could not be decoded." }
+        val compressed = ByteArrayOutputStream()
+        require(bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, compressed)) { "Unable to encode receipt image." }
+        require(compressed.size() <= 10 * 1024 * 1024) { "Receipt image must be 10 MB or smaller." }
+        output.outputStream().use { compressed.writeTo(it) }
         output.absolutePath
     }
 }

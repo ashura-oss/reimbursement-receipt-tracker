@@ -1,0 +1,19 @@
+# Copy to deploy.bicepparam and fill values; keep this file out of source control.
+using './main.bicep'
+
+param location = 'southeastasia'
+param appName = 'receipt-claims-api'
+param environmentName = 'receipt-claims-env'
+param existingEnvironmentId = ''
+param deployApp = true
+param registryName = 'replace-with-globally-unique-acr-name'
+param imageTag = 'latest'
+param postgresServerName = 'replace-with-globally-unique-pg-name'
+param postgresAdminLogin = 'receiptadmin'
+param postgresAdminPassword = readEnvironmentVariable('POSTGRES_ADMIN_PASSWORD')
+param jwtSecret = readEnvironmentVariable('JWT_SECRET')
+param postgresDatabaseName = 'receiptclaims'
+param storageAccountName = 'replace-with-globally-unique-storage-name'
+param storageContainerName = 'receipt-claims'
+param excelTemplateStorageKey = 'templates/vadi-claim.xlsx'
+param logAnalyticsName = 'receipt-claims-logs'

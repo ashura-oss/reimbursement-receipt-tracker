@@ -66,6 +66,8 @@ dependencies {
     ksp("com.google.dagger:hilt-compiler:2.53")
     implementation("androidx.hilt:hilt-navigation-compose:1.2.0")
     implementation("androidx.hilt:hilt-work:1.2.0")
+    // Generates the WorkerAssistedFactory bindings consumed by HiltWorkerFactory.
+    ksp("androidx.hilt:hilt-compiler:1.2.0")
 
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
