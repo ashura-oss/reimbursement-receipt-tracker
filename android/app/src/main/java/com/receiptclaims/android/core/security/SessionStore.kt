@@ -10,6 +10,10 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -37,7 +41,17 @@ class SessionStore @Inject constructor(
         }
     }
 
-    suspend fun snapshot(): SessionSnapshot? = context.sessionDataStore.data.first().let(::snapshotFrom)
+    suspend fun snapshot(): SessionSnapshot? {
+        val preferences = context.sessionDataStore.data.first()
+        val snapshot = snapshotFrom(preferences)
+        if (snapshot == null) {
+            val storedToken = preferences[accessTokenKey]?.let { runCatching { cipher.decrypt(it) }.getOrNull() }
+            if (storedToken != null && isJwtExpired(storedToken, System.currentTimeMillis() / 1_000)) {
+                clearIfAccessTokenMatches(storedToken)
+            }
+        }
+        return snapshot
+    }
 
     /** Clears only the credential that produced a failed request; a newer login is preserved. */
     suspend fun clearIfAccessTokenMatches(accessToken: String): Boolean {
@@ -56,9 +70,28 @@ class SessionStore @Inject constructor(
 
     suspend fun userId(): Int? = snapshot()?.userId
 
-    fun userIdFlow(): Flow<Int?> = context.sessionDataStore.data.map { snapshotFrom(it)?.userId }
+    fun userIdFlow(): Flow<Int?> = snapshotFlow().map { it?.userId }
 
-    fun snapshotFlow(): Flow<SessionSnapshot?> = context.sessionDataStore.data.map(::snapshotFrom)
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun snapshotFlow(): Flow<SessionSnapshot?> = context.sessionDataStore.data.flatMapLatest { preferences ->
+        val snapshot = snapshotFrom(preferences)
+        flow {
+            emit(snapshot)
+            if (snapshot != null) {
+                val expiresAt = jwtExpirationFrom(snapshot.accessToken)
+                if (expiresAt != null) {
+                    val remainingMillis = (expiresAt * 1_000 - System.currentTimeMillis()).coerceAtLeast(0)
+                    if (remainingMillis > 0) delay(remainingMillis)
+                    clearIfAccessTokenMatches(snapshot.accessToken)
+                }
+            } else {
+                val storedToken = preferences[accessTokenKey]?.let { runCatching { cipher.decrypt(it) }.getOrNull() }
+                if (storedToken != null && isJwtExpired(storedToken, System.currentTimeMillis() / 1_000)) {
+                    clearIfAccessTokenMatches(storedToken)
+                }
+            }
+        }
+    }
 
     private fun snapshotFrom(preferences: androidx.datastore.preferences.core.Preferences): SessionSnapshot? {
         val token = preferences[accessTokenKey]?.let { runCatching { cipher.decrypt(it) }.getOrNull() } ?: return null
@@ -77,11 +110,15 @@ class SessionStore @Inject constructor(
     }.getOrNull()
 
     private fun isJwtExpired(token: String, nowEpochSeconds: Long): Boolean = runCatching {
-        val encodedPayload = token.split('.').getOrNull(1) ?: return@runCatching false
-        val claims = JSONObject(String(Base64.decode(encodedPayload, Base64.URL_SAFE or Base64.NO_WRAP), Charsets.UTF_8))
-        val expiresAt = claims.optLong("exp", 0L)
+        val expiresAt = jwtExpirationFrom(token) ?: return@runCatching false
         expiresAt > 0L && expiresAt <= nowEpochSeconds
     }.getOrDefault(false)
+
+    private fun jwtExpirationFrom(token: String): Long? = runCatching {
+        val encodedPayload = token.split('.').getOrNull(1) ?: return@runCatching null
+        JSONObject(String(Base64.decode(encodedPayload, Base64.URL_SAFE or Base64.NO_WRAP), Charsets.UTF_8))
+            .optLong("exp", 0L).takeIf { it > 0L }
+    }.getOrNull()
 
     suspend fun clear() {
         context.sessionDataStore.edit { it.clear() }

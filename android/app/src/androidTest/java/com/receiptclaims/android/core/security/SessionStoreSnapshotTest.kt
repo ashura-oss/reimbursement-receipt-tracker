@@ -8,6 +8,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -50,6 +51,18 @@ class SessionStoreSnapshotTest {
 
         assertNull(store.snapshot())
         assertNull(store.snapshotFlow().take(1).toList().single())
+    }
+
+    @Test
+    fun activeSnapshotFlowExpiresAndClearsItsSessionWithoutAnotherDataStoreWrite() = runBlocking {
+        val expiringToken = tokenFor(304, expiresAt = System.currentTimeMillis() / 1_000 + 5)
+        store.save(expiringToken, refreshToken = null, userId = 304)
+
+        val emissions = withTimeout(10_000) { store.snapshotFlow().take(2).toList() }
+
+        assertEquals(SessionSnapshot(304, expiringToken), emissions.first())
+        assertNull(emissions.last())
+        assertNull(store.snapshot())
     }
 
     @Test
