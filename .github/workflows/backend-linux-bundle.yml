@@ -2,6 +2,12 @@ name: Build backend Linux deployment bundle
 
 on:
   workflow_dispatch:
+    inputs:
+      report_layout_qa:
+        description: Also render synthetic report pages and upload a visual QA artifact
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -38,12 +44,14 @@ jobs:
           cp -a backend/drizzle/pg "$bundle/drizzle/"
           find "$bundle/src" -type f \( -name '*.test.*' -o -name '*.spec.*' -o -name testImageFixtures.js \) -delete
           find "$bundle/src" -type d \( -name tests -o -name __tests__ -o -name fixtures -o -name test-fixtures \) -prune -exec rm -rf {} +
-          if find "$bundle" -type f \( -name '.env' -o -name '.env.*' \) | grep -q .; then
+          env_file="$(find "$bundle" -type f \( -name '.env' -o -name '.env.*' \) -print -quit)"
+          if [[ -n "$env_file" ]]; then
             echo 'Refusing bundle with environment files or credentials.' >&2
             exit 1
           fi
-          if find "$bundle/src" "$bundle/assets" "$bundle/drizzle" -print | grep -E '(^|/)(tests?|__tests__|fixtures|test-fixtures|storage|work|reports?)(/|$)' | grep -q . || \
-             find "$bundle/src" "$bundle/assets" "$bundle/drizzle" -type f \( -name '*.test.*' -o -name '*.spec.*' -o -name '*.db' -o -name '*.db-shm' -o -name '*.db-wal' -o -name '*.xlsx' -o -name '*.xls' -o -name '*.docx' -o -name '*.pdf' \) | grep -q .; then
+          (cd "$bundle" && find src assets drizzle -print) > "$RUNNER_TEMP/app-owned-paths.txt"
+          (cd "$bundle" && find src assets drizzle -type f \( -name '*.test.*' -o -name '*.spec.*' -o -name '*.db' -o -name '*.db-shm' -o -name '*.db-wal' -o -name '*.xlsx' -o -name '*.xls' -o -name '*.docx' -o -name '*.pdf' \) -print -quit) > "$RUNNER_TEMP/app-owned-private-files.txt"
+          if grep -E -q '(^|/)(tests?|__tests__|fixtures|test-fixtures|storage|work|reports?)(/|$)' "$RUNNER_TEMP/app-owned-paths.txt" || [[ -s "$RUNNER_TEMP/app-owned-private-files.txt" ]]; then
             echo 'Refusing bundle with app-owned tests, local data, or private documents.' >&2
             exit 1
           fi
@@ -57,5 +65,52 @@ jobs:
         with:
           name: receipt-claims-linux
           path: ${{ runner.temp }}/receipt-claims-linux.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  report-layout-qa:
+    if: inputs.report_layout_qa
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Generate DOCX from synthetic portrait and landscape receipts
+        run: node backend/qa/generate-report-layout.mjs "$RUNNER_TEMP/report-layout-qa.docx"
+
+      - name: Install Linux document renderer
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libreoffice-writer poppler-utils
+
+      - name: Render DOCX to PDF and page PNGs
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/report-layout-render"
+          profile="file:///tmp/lo-profile-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "$output"
+          timeout 180 soffice --headless "-env:UserInstallation=$profile" --convert-to pdf --outdir "$output" "$RUNNER_TEMP/report-layout-qa.docx"
+          test -s "$output/report-layout-qa.pdf"
+          pdftoppm -png -r 150 "$output/report-layout-qa.pdf" "$output/page"
+          test -n "$(find "$output" -maxdepth 1 -name 'page-*.png' -print -quit)"
+
+      - name: Upload report layout QA pages
+        uses: actions/upload-artifact@v7
+        with:
+          name: receipt-claims-report-layout-qa
+          path: ${{ runner.temp }}/report-layout-render/
           if-no-files-found: error
           retention-days: 7
