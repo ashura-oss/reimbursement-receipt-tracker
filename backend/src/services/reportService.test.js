@@ -189,6 +189,11 @@ describe('report internals', () => {
 
   it('does not total mixed-currency receipt amounts while keeping each receipt and SGD total', async () => {
     const { workbook } = await makeTemplate()
+    const templateSheet = workbook.worksheets[0]
+    // Match the private Vadi template: this summary is a valid SGD-equivalent
+    // SUMIF over column O and must survive even when source currencies differ.
+    templateSheet.getCell('K10').value = { formula: 'SUMIF($C$21:$C$49,H10,$O$21:$O$49)' }
+    templateSheet.getCell('K50').value = { formula: 'SUM(K21:K49)' }
     const templatePath = temporaryTemplatePath('mixed-currency-template')
     await workbook.xlsx.writeFile(templatePath)
     process.env.EXCEL_TEMPLATE_PATH = templatePath
@@ -204,7 +209,7 @@ describe('report internals', () => {
     expect(sheet.getCell('M21').value).toBe('SGD')
     expect(sheet.getCell('K22').value).toBe(100)
     expect(sheet.getCell('M22').value).toBe('INR')
-    expect(sheet.getCell('K10').value).toBeNull()
+    expect(sheet.getCell('K10').formula).toBe('SUMIF($C$21:$C$49,H10,$O$21:$O$49)')
     expect(sheet.getCell('K50').value).toBeNull()
     expect(sheet.getCell('O50').value.formula).toBe('SUM(O21:O49)')
     await fs.rm(templatePath, { force: true })
