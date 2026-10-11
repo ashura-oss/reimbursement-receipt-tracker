@@ -15,7 +15,7 @@ The backend follows the BED course structure: routes mount controllers, controll
 
 Receipt amounts are entered manually. Frankfurter supplies date-scoped exchange rates, and the exact rate used is saved with each receipt.
 
-The backend uses SQLite by default for local development. The planned production host is Azure App Service on Linux (Basic B1), Azure Database for PostgreSQL Flexible Server (Burstable B1ms, 32 GiB), and a private Azure Blob container with managed-identity access. Deployment and PostgreSQL migration instructions are in [backend/infra/README.md](backend/infra/README.md). Container Apps artifacts remain optional experiments.
+The backend uses SQLite by default for local development. The production deployment runs on Azure App Service for Linux, with Azure Database for PostgreSQL Flexible Server and a private Azure Blob container accessed through managed identity. Deployment and PostgreSQL migration instructions are in [backend/infra/README.md](backend/infra/README.md).
 
 ## Development
 

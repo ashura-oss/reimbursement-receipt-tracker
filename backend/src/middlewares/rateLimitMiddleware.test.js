@@ -3,6 +3,7 @@ import request from 'supertest'
 import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { clientIpKey } from './rateLimitMiddleware.js'
 
 process.env.NODE_ENV = 'production'
 process.env.DISABLE_HTTP_SERVER = 'true'
@@ -17,6 +18,16 @@ const [{ default: app }, { closeDatabase }] = await Promise.all([
 ])
 
 describe('production request limits', () => {
+  it('keeps one IPv4 rate-limit key when a proxy changes the source port', () => {
+    expect(clientIpKey({ ip: '116.14.46.243:39765' })).toBe(clientIpKey({ ip: '116.14.46.243:58321' }))
+    expect(clientIpKey({ ip: '116.14.46.243:39765' })).toBe(clientIpKey({ ip: '116.14.46.243' }))
+  })
+
+  it('uses the library IPv6 subnet key and groups addresses from the same /56', () => {
+    expect(clientIpKey({ ip: '2001:db8:abcd:1200::1' })).toBe(clientIpKey({ ip: '2001:db8:abcd:12ff::2' }))
+    expect(clientIpKey({ ip: '[2001:db8:abcd:1200::1]:39765' })).toBe(clientIpKey({ ip: '2001:db8:abcd:1200::1' }))
+  })
+
   it('limits repeated authentication attempts and returns a retryable 429', async () => {
     const responses = []
     for (let attempt = 0; attempt < 11; attempt += 1) responses.push(await request(app).post('/api/auth/login').send({}))
