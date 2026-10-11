@@ -1,0 +1,30 @@
+# Node.js
+**/node_modules/
+**/.env
+**/.env.*
+!**/.env.example
+**/coverage/
+**/dist/
+**/build/
+
+# Local databases and runtime storage
+**/*.db
+**/*.db-shm
+**/*.db-wal
+backend/storage/*
+!backend/storage/.gitkeep
+
+# Android / Gradle
+**/.gradle/
+**/local.properties
+**/captures/
+**/*.keystore
+**/*.jks
+
+# Workspace-only material
+work/
+outputs/
+.idea/
+*.iml
+Thumbs.db
+.DS_Store

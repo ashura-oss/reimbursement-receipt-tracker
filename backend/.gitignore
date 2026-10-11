@@ -1,0 +1,10 @@
+node_modules/
+.env
+*.db
+*.db-shm
+*.db-wal
+storage/receipts/*
+storage/reports/*
+storage/*
+!storage/.gitkeep
+coverage/

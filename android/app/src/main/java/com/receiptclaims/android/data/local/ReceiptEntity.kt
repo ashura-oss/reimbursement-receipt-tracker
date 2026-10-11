@@ -1,0 +1,28 @@
+package com.receiptclaims.android.data.local
+
+import androidx.room.Entity
+import androidx.room.PrimaryKey
+
+@Entity(tableName = "receipts")
+data class ReceiptEntity(
+    @PrimaryKey val clientReceiptId: String,
+    val serverId: String? = null,
+    val amount: String,
+    val currency: String = "SGD",
+    val receiptDate: String,
+    val categoryId: Int,
+    val description: String? = null,
+    val note: String? = null,
+    val imagePath: String,
+    val status: String = STATUS_PENDING_UPLOAD,
+    val errorMessage: String? = null,
+    val createdAt: Long = System.currentTimeMillis()
+) {
+    companion object {
+        const val STATUS_DRAFT = "DRAFT"
+        const val STATUS_PENDING_UPLOAD = "PENDING_UPLOAD"
+        const val STATUS_UPLOADING = "UPLOADING"
+        const val STATUS_UPLOADED = "UPLOADED"
+        const val STATUS_FAILED = "FAILED"
+    }
+}
