@@ -18,11 +18,16 @@ data class ReceiptDto(
     val description: String? = null,
     val note: String? = null,
     val imageUrl: String? = null,
-    val status: String = "UPLOADED"
+    val status: String = "UNCLAIMED",
+    val categoryName: String? = null,
+    val storageKey: String? = null,
+    val originalFileName: String? = null,
+    val mimeType: String? = null
 )
 data class ClaimDto(
     val id: Int,
     val status: String,
+    val title: String? = null,
     val receiptIds: List<String>? = emptyList(),
     val totalSgd: String? = null,
     val createdAt: String? = null,

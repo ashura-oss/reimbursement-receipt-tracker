@@ -1,11 +1,12 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { eq } from 'drizzle-orm'
+import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 process.env.NODE_ENV = 'test'
 process.env.DATABASE_PROVIDER = 'sqlite'
-const databaseFile = `claim-model-${process.pid}.db`
+const databaseFile = `claim-model-${randomUUID()}.db`
 process.env.DATABASE_URL = `file:${databaseFile}`
 const databasePath = path.resolve(databaseFile)
 try { fs.rmSync(databasePath, { force: true }) } catch {}
@@ -15,7 +16,7 @@ const [{ db, client, closeDatabase }, schema, claimModel] = await Promise.all([
   import('../db/schema.js'),
   import('./claimModel.js'),
 ])
-const { createReceipt } = await import('./receiptModel.js')
+const { createReceipt, updateReceipt, deleteReceipt } = await import('./receiptModel.js')
 
 const createTables = async () => {
   await client.execute('PRAGMA foreign_keys = ON')
@@ -59,6 +60,8 @@ describe('claim receipt exclusivity', () => {
   it('allows a receipt in one claim and rejects re-use in another claim', async () => {
     await db.transaction((tx) => claimModel.createClaimWithReceipts({ userId: ownerId, title: 'First claim', receiptIds: [firstReceiptId] }, tx))
     await expect(db.transaction((tx) => claimModel.createClaimWithReceipts({ userId: ownerId, title: 'Duplicate claim', receiptIds: [firstReceiptId] }, tx))).rejects.toThrow('RECEIPT_ALREADY_CLAIMED')
+    expect(await updateReceipt(firstReceiptId, ownerId, { amount: 999 })).toBeNull()
+    expect(await deleteReceipt(firstReceiptId, ownerId)).toBe(false)
   })
 
   it('does not allow a user to claim another user\'s receipt', async () => {
@@ -85,5 +88,7 @@ describe('claim receipt exclusivity', () => {
 
 afterAll(async () => {
   await closeDatabase()
-  try { fs.rmSync(databasePath, { force: true }) } catch {}
+  for (const file of [databasePath, `${databasePath}-shm`, `${databasePath}-wal`]) {
+    try { fs.rmSync(file, { force: true }) } catch {}
+  }
 })

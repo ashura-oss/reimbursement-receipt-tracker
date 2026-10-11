@@ -10,14 +10,14 @@ import androidx.work.WorkManager
 import java.util.concurrent.TimeUnit
 
 object UploadScheduler {
-    fun enqueue(context: Context, clientReceiptId: String) {
+    fun enqueue(context: Context, clientReceiptId: String, ownerUserId: Int) {
         val request = OneTimeWorkRequestBuilder<ReceiptUploadWorker>()
-            .setInputData(Data.Builder().putString(ReceiptUploadWorker.KEY_CLIENT_RECEIPT_ID, clientReceiptId).build())
+            .setInputData(Data.Builder().putString(ReceiptUploadWorker.KEY_CLIENT_RECEIPT_ID, clientReceiptId).putInt(ReceiptUploadWorker.KEY_OWNER_USER_ID, ownerUserId).build())
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .setBackoffCriteria(androidx.work.BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
             .build()
         WorkManager.getInstance(context).enqueueUniqueWork(
-            "receipt-upload-$clientReceiptId",
+            "receipt-upload-$ownerUserId-$clientReceiptId",
             ExistingWorkPolicy.KEEP,
             request
         )

@@ -3,9 +3,21 @@ import { and, eq } from 'drizzle-orm'
 import { db } from '../db/db.js'
 import { exchangeRates } from '../db/schema.js'
 import { DEFAULT_CURRENCY, SUPPORTED_CURRENCIES } from '../constants/currencies.js'
+import { convertAmountToSgd } from '../utils/validationHelpers.js'
 
 const BASE_URL = (process.env.FRANKFURTER_BASE_URL || 'https://api.frankfurter.dev/v2').replace(/\/$/, '')
+const REQUEST_TIMEOUT_MS = Math.min(15_000, Math.max(100, Number(process.env.FRANKFURTER_TIMEOUT_MS || 8_000)))
 const cache = new Map()
+const pendingRates = new Map()
+
+export class ExchangeRateUnavailableError extends Error {
+  constructor() {
+    super('Exchange rate service is temporarily unavailable.')
+    this.name = 'ExchangeRateUnavailableError'
+    this.code = 'EXCHANGE_RATE_UNAVAILABLE'
+    this.statusCode = 503
+  }
+}
 
 function asDate(value) {
   const date = value ? new Date(value) : new Date()
@@ -35,44 +47,63 @@ export async function getRate(sourceCurrency = DEFAULT_CURRENCY, rateDate = new 
 
   const cacheKey = `${source}:${target}:${day}`
   if (cache.has(cacheKey)) return cache.get(cacheKey)
+  if (pendingRates.has(cacheKey)) return pendingRates.get(cacheKey)
+  const pending = (async () => {
+    const [stored] = await db.select({ rate: exchangeRates.rate })
+      .from(exchangeRates)
+      .where(and(
+        eq(exchangeRates.sourceCurrency, source),
+        eq(exchangeRates.targetCurrency, target),
+        eq(exchangeRates.rateDate, new Date(`${day}T00:00:00.000Z`)),
+      ))
+      .limit(1)
+    if (stored) {
+      const rate = Number(stored.rate)
+      if (!Number.isFinite(rate) || rate <= 0 || rate > 1_000_000) throw new ExchangeRateUnavailableError()
+      cache.set(cacheKey, rate)
+      return rate
+    }
 
-  const [stored] = await db.select({ rate: exchangeRates.rate })
-    .from(exchangeRates)
-    .where(and(
-      eq(exchangeRates.sourceCurrency, source),
-      eq(exchangeRates.targetCurrency, target),
-      eq(exchangeRates.rateDate, new Date(`${day}T00:00:00.000Z`)),
-    ))
-    .limit(1)
-  if (stored) {
-    cache.set(cacheKey, Number(stored.rate))
-    return Number(stored.rate)
+    const rate = await fetchFrankfurterRate(getFrankfurterUrl(source, target, day))
+    await db.insert(exchangeRates).values({
+      sourceCurrency: source,
+      targetCurrency: target,
+      rateDate: new Date(`${day}T00:00:00.000Z`),
+      rate,
+      provider: 'frankfurter',
+    }).onConflictDoNothing()
+    cache.set(cacheKey, rate)
+    return rate
+  })()
+  pendingRates.set(cacheKey, pending)
+  try { return await pending } finally { pendingRates.delete(cacheKey) }
+}
+
+async function fetchFrankfurterRate(url) {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  timeout.unref?.()
+  try {
+    const response = await fetch(url, { signal: controller.signal })
+    if (!response.ok) throw new Error('upstream status')
+    const payload = await response.json()
+    const rate = Number(payload.rate)
+    if (!Number.isFinite(rate) || rate <= 0 || rate > 1_000_000) throw new Error('invalid rate payload')
+    return rate
+  } catch {
+    throw new ExchangeRateUnavailableError()
+  } finally {
+    clearTimeout(timeout)
   }
-
-  const url = `${BASE_URL}/rate/${encodeURIComponent(source)}/${encodeURIComponent(target)}?date=${day}`
-  const response = await fetch(url)
-  if (!response.ok) throw new Error(`Frankfurter request failed (${response.status})`)
-  const payload = await response.json()
-  const rate = Number(payload.rate)
-  if (!Number.isFinite(rate) || rate <= 0) throw new Error('Frankfurter returned an invalid exchange rate')
-
-  const normalizedDate = new Date(`${payload.date || day}T00:00:00.000Z`)
-  await db.insert(exchangeRates).values({
-    sourceCurrency: source,
-    targetCurrency: target,
-    rateDate: normalizedDate,
-    rate,
-    provider: 'frankfurter',
-  }).onConflictDoNothing()
-  cache.set(cacheKey, rate)
-  return rate
 }
 
 export async function calculateSgdEquivalent(amount, currency = DEFAULT_CURRENCY, rateDate = new Date()) {
   const numericAmount = Number(amount)
   if (!Number.isFinite(numericAmount) || numericAmount < 0) throw new Error('Amount must be a non-negative number')
   const rate = await getRate(currency, rateDate, DEFAULT_CURRENCY)
-  return { amount: numericAmount, currency: assertCurrency(currency), exchangeRate: rate, sgdEquivalent: Math.round(numericAmount * rate * 100) / 100 }
+  const sgdEquivalent = numericAmount === 0 ? 0 : convertAmountToSgd(numericAmount, rate)
+  if (sgdEquivalent === null) throw new RangeError('SGD equivalent exceeds the supported amount range')
+  return { amount: numericAmount, currency: assertCurrency(currency), exchangeRate: rate, sgdEquivalent }
 }
 
 export function clearRateCache() { cache.clear() }
@@ -80,5 +111,5 @@ export function getFrankfurterUrl(sourceCurrency, targetCurrency, rateDate) {
   return `${BASE_URL}/rate/${encodeURIComponent(assertCurrency(sourceCurrency))}/${encodeURIComponent(assertCurrency(targetCurrency))}?date=${dateKey(rateDate)}`
 }
 
-export const exchangeRateService = { getRate, calculateSgdEquivalent, clearRateCache, getFrankfurterUrl }
+export const exchangeRateService = { getRate, calculateSgdEquivalent, clearRateCache, getFrankfurterUrl, ExchangeRateUnavailableError }
 

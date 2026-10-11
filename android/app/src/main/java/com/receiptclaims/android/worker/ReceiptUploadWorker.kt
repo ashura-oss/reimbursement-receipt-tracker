@@ -16,9 +16,12 @@ class ReceiptUploadWorker @AssistedInject constructor(
 ) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result {
         val clientId = inputData.getString(KEY_CLIENT_RECEIPT_ID) ?: return Result.failure()
+        val ownerUserId = inputData.getInt(KEY_OWNER_USER_ID, -1).takeIf { it > 0 } ?: return Result.failure()
         return try {
-            repository.upload(clientId)
+            repository.upload(clientId, ownerUserId)
             Result.success()
+        } catch (_: ReceiptRepository.AccountMismatchException) {
+            Result.failure()
         } catch (_: Throwable) {
             if (runAttemptCount >= MAX_ATTEMPTS) Result.failure() else Result.retry()
         }
@@ -26,6 +29,7 @@ class ReceiptUploadWorker @AssistedInject constructor(
 
     companion object {
         const val KEY_CLIENT_RECEIPT_ID = "clientReceiptId"
+        const val KEY_OWNER_USER_ID = "ownerUserId"
         private const val MAX_ATTEMPTS = 5
     }
 }

@@ -145,7 +145,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = if (deployApp) {
           { name: 'PORT', value: '3000' }
           { name: 'DATABASE_PROVIDER', value: 'postgres' }
           { name: 'DATABASE_URL', secretRef: 'database-url' }
-          { name: 'POSTGRES_SSL', value: 'require' }
+          { name: 'POSTGRES_SSL', value: 'verify-full' }
           { name: 'ADMIN_PORTAL_ENABLED', value: 'false' }
           { name: 'STORAGE_PROVIDER', value: 'azure' }
           { name: 'AZURE_STORAGE_ACCOUNT_URL', value: storageAccountUrl }

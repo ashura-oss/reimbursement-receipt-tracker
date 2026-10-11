@@ -15,20 +15,23 @@ The backend follows the BED course structure: routes mount controllers, controll
 
 The first release has no Luna integration. Receipt amounts are entered manually. Frankfurter supplies date-scoped exchange rates, and the exact rate used is saved with each receipt.
 
-The backend uses SQLite by default for local development. Azure deployments can set `DATABASE_PROVIDER=postgres` and use Azure Database for PostgreSQL Flexible Server; PostgreSQL migrations and seed commands are documented in [backend/README.md](backend/README.md).
+The backend uses SQLite by default for local development. The planned production host is Azure App Service on Linux (Basic B1), Azure Database for PostgreSQL Flexible Server (Burstable B1ms, 32 GiB), and a private Azure Blob container with managed-identity access. Deployment and PostgreSQL migration instructions are in [backend/infra/README.md](backend/infra/README.md). Container Apps artifacts remain optional experiments.
 
 ## Development
 
 See [backend/README.md](backend/README.md) for the API setup and route list. Open `android/` in Android Studio and set `BACKEND_BASE_URL` in `local.properties` for the Android client.
 
-Do not commit `.env`, local databases, receipt images, generated reports, Gradle files, signing keys, or credentials.
+For a command-line Android debug build on Windows, run `android\gradlew.bat assembleDebug` from the repository root; on macOS/Linux, run `./android/gradlew assembleDebug`. The Gradle wrapper downloads its pinned Gradle version as needed.
 
-## Heroku deployment
+The Android Gradle wrapper (`gradlew`, `gradlew.bat`, and `gradle/wrapper`) is part of the source and should stay committed. Do not commit Gradle build caches, `local.properties`, `.env` files, local databases, receipt images, generated reports, signing keys, or credentials.
 
-The repository includes a root `package.json` and `Procfile` so Heroku can run the backend from the monorepo:
+## Azure App Service deployment
 
-```text
-web: npm start
+Provision the Azure resources from `backend/infra/appservice.bicep`, then package and deploy the production backend from `backend/`:
+
+```powershell
+cd backend
+./infra/deploy-appservice.ps1 -ResourceGroup receipt-claims-rg -AppName receipt-claims-api
 ```
 
-The root start script delegates to `backend/package.json`. Configure the backend environment variables in Heroku Config Vars, including `DATABASE_URL`, `DATABASE_AUTH_TOKEN`, `JWT_SECRET`, and `ADMIN_PORTAL_ENABLED=false`. For Azure Blob Storage, also configure `STORAGE_PROVIDER=azure`, `AZURE_STORAGE_CONNECTION_STRING`, and `AZURE_STORAGE_CONTAINER`. Never place these values in Git.
+The infrastructure template configures managed identity for private Blob access and sets PostgreSQL, JWT, and admin-disabled app settings. PostgreSQL ingress must be restricted to the App Service outbound IP addresses; see the deployment steps before running migrations. Keep production template workbooks in the private Blob account instead of Git. The old root `Procfile` supports an optional Heroku deployment only; it is not the primary production path.

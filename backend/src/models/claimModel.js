@@ -1,5 +1,5 @@
 import { and, desc, eq, inArray } from 'drizzle-orm'
-import { db } from '../db/db.js'
+import { databaseProvider, db } from '../db/db.js'
 import { claimReceipts, claims, receiptCategories, receipts } from '../db/schema.js'
 
 const claimColumns = {
@@ -27,6 +27,7 @@ export const getByIdForUser = async (id, userId, tx = db) => {
 
 export const getReceipts = async (claimId, userId, tx = db) => tx.select({
   id: receipts.id,
+  clientReceiptId: receipts.clientReceiptId,
   categoryId: receipts.categoryId,
   categoryName: receiptCategories.name,
   receiptDate: receipts.receiptDate,
@@ -44,8 +45,10 @@ export const getReceipts = async (claimId, userId, tx = db) => tx.select({
   .where(and(eq(claimReceipts.claimId, claimId), eq(claims.userId, userId)))
 
 export const createClaimWithReceipts = async ({ userId, title, startDate, endDate, receiptIds }, tx = db) => {
-  const selected = await tx.select({ id: receipts.id, amount: receipts.amount, sgdEquivalent: receipts.sgdEquivalent, status: receipts.status })
+  let receiptSelection = tx.select({ id: receipts.id, amount: receipts.amount, sgdEquivalent: receipts.sgdEquivalent, status: receipts.status })
     .from(receipts).where(and(eq(receipts.userId, userId), inArray(receipts.id, receiptIds)))
+  if (databaseProvider === 'postgres') receiptSelection = receiptSelection.for('update')
+  const selected = await receiptSelection
   if (selected.length !== receiptIds.length) throw new Error('RECEIPT_OWNERSHIP_MISMATCH')
   if (selected.some((receipt) => receipt.status !== 'UNCLAIMED')) throw new Error('RECEIPT_ALREADY_CLAIMED')
   const totalAmount = selected.reduce((sum, item) => sum + item.amount, 0)

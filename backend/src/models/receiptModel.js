@@ -5,6 +5,7 @@ import { receiptCategories, receipts } from '../db/schema.js'
 const receiptColumns = {
   id: receipts.id,
   userId: receipts.userId,
+  clientReceiptId: receipts.clientReceiptId,
   categoryId: receipts.categoryId,
   categoryName: receiptCategories.name,
   receiptDate: receipts.receiptDate,
@@ -61,12 +62,12 @@ export const createReceipt = async (data, tx = db) => {
 
 export const updateReceipt = async (id, userId, data, tx = db) => {
   const rows = await tx.update(receipts).set({ ...data, updatedAt: new Date() })
-    .where(and(eq(receipts.id, id), eq(receipts.userId, userId))).returning({ id: receipts.id })
+    .where(and(eq(receipts.id, id), eq(receipts.userId, userId), eq(receipts.status, 'UNCLAIMED'))).returning({ id: receipts.id })
   if (!rows[0]) return null
   return getByIdForUser(id, userId, tx)
 }
 
 export const deleteReceipt = async (id, userId, tx = db) => {
-  const rows = await tx.delete(receipts).where(and(eq(receipts.id, id), eq(receipts.userId, userId))).returning({ id: receipts.id })
+  const rows = await tx.delete(receipts).where(and(eq(receipts.id, id), eq(receipts.userId, userId), eq(receipts.status, 'UNCLAIMED'))).returning({ id: receipts.id })
   return Boolean(rows[0])
 }

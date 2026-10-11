@@ -16,6 +16,7 @@ backend/storage/*
 
 # Android / Gradle
 **/.gradle/
+**/.kotlin/
 **/local.properties
 **/captures/
 android/*.png

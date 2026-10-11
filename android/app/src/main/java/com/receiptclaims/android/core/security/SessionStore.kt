@@ -8,10 +8,14 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import javax.inject.Inject
 import javax.inject.Singleton
 
 private val Context.sessionDataStore by preferencesDataStore(name = "secure_session")
+
+data class SessionSnapshot(val userId: Int, val accessToken: String)
 
 @Singleton
 class SessionStore @Inject constructor(
@@ -31,19 +35,30 @@ class SessionStore @Inject constructor(
         }
     }
 
-    suspend fun accessToken(): String? = context.sessionDataStore.data.first()[accessTokenKey]
-        ?.let { runCatching { cipher.decrypt(it) }.getOrNull() }
+    suspend fun snapshot(): SessionSnapshot? = context.sessionDataStore.data.first().let(::snapshotFrom)
 
-    suspend fun userId(): Int? {
-        context.sessionDataStore.data.first()[userIdKey]?.toIntOrNull()?.let { return it }
-        // Recover the id for sessions created by older builds; the backend JWT carries userId.
-        val token = accessToken() ?: return null
-        return runCatching {
-            val encodedPayload = token.split('.').getOrNull(1) ?: return@runCatching null
-            JSONObject(String(Base64.decode(encodedPayload, Base64.URL_SAFE or Base64.NO_WRAP), Charsets.UTF_8))
-                .optInt("userId").takeIf { it > 0 }
-        }.getOrNull()
+    suspend fun accessToken(): String? = snapshot()?.accessToken
+
+    suspend fun userId(): Int? = snapshot()?.userId
+
+    fun userIdFlow(): Flow<Int?> = context.sessionDataStore.data.map { snapshotFrom(it)?.userId }
+
+    fun snapshotFlow(): Flow<SessionSnapshot?> = context.sessionDataStore.data.map(::snapshotFrom)
+
+    private fun snapshotFrom(preferences: androidx.datastore.preferences.core.Preferences): SessionSnapshot? {
+        val token = preferences[accessTokenKey]?.let { runCatching { cipher.decrypt(it) }.getOrNull() } ?: return null
+        val jwtUserId = userIdFromJwt(token)
+        val storedUserId = preferences[userIdKey]?.toIntOrNull()
+        // The identity from the same signed-in token is authoritative; preference identity is a legacy fallback.
+        val userId = jwtUserId ?: storedUserId ?: return null
+        return SessionSnapshot(userId, token)
     }
+
+    private fun userIdFromJwt(token: String): Int? = runCatching {
+        val encodedPayload = token.split('.').getOrNull(1) ?: return@runCatching null
+        JSONObject(String(Base64.decode(encodedPayload, Base64.URL_SAFE or Base64.NO_WRAP), Charsets.UTF_8))
+            .optInt("userId").takeIf { it > 0 }
+    }.getOrNull()
 
     suspend fun clear() {
         context.sessionDataStore.edit { it.clear() }

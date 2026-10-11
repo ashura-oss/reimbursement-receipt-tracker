@@ -1,0 +1,61 @@
+name: Build backend Linux deployment bundle
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install, test, and prune development dependencies
+        working-directory: backend
+        run: |
+          npm ci
+          npm test
+          npm prune --omit=dev
+
+      - name: Assemble and validate production ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle="$RUNNER_TEMP/receipt-claims-linux"
+          mkdir -p "$bundle/drizzle"
+          cp backend/package.json backend/package-lock.json backend/index.js backend/drizzle.pg.config.js "$bundle/"
+          cp -a backend/src backend/assets backend/node_modules "$bundle/"
+          cp -a backend/drizzle/pg "$bundle/drizzle/"
+          find "$bundle/src" -type f \( -name '*.test.*' -o -name '*.spec.*' -o -name testImageFixtures.js \) -delete
+          find "$bundle/src" -type d \( -name tests -o -name __tests__ -o -name fixtures -o -name test-fixtures \) -prune -exec rm -rf {} +
+          if find "$bundle" -type f \( -name '.env' -o -name '.env.*' \) | grep -q .; then
+            echo 'Refusing bundle with environment files or credentials.' >&2
+            exit 1
+          fi
+          if find "$bundle/src" "$bundle/assets" "$bundle/drizzle" -print | grep -E '(^|/)(tests?|__tests__|fixtures|test-fixtures|storage|work|reports?)(/|$)' | grep -q . || \
+             find "$bundle/src" "$bundle/assets" "$bundle/drizzle" -type f \( -name '*.test.*' -o -name '*.spec.*' -o -name '*.db' -o -name '*.db-shm' -o -name '*.db-wal' -o -name '*.xlsx' -o -name '*.xls' -o -name '*.docx' -o -name '*.pdf' \) | grep -q .; then
+            echo 'Refusing bundle with app-owned tests, local data, or private documents.' >&2
+            exit 1
+          fi
+          test -f "$bundle/index.js"
+          test -d "$bundle/node_modules"
+          (cd "$bundle" && zip -qr "$RUNNER_TEMP/receipt-claims-linux.zip" .)
+          unzip -t "$RUNNER_TEMP/receipt-claims-linux.zip"
+
+      - name: Upload deployment artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: receipt-claims-linux
+          path: ${{ runner.temp }}/receipt-claims-linux.zip
+          if-no-files-found: error
+          retention-days: 7

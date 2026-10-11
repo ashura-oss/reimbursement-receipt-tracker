@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -34,6 +35,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -44,6 +46,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import java.time.LocalDate
 import java.time.format.DateTimeParseException
+import coil.compose.AsyncImage
+import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -51,21 +55,29 @@ fun AddReceiptScreen(onBack: () -> Unit, onSaved: () -> Unit, viewModel: Receipt
     val context = LocalContext.current
     val categories by viewModel.categories.collectAsStateWithLifecycle()
     val saveState by viewModel.saveState.collectAsStateWithLifecycle()
-    var amount by remember { mutableStateOf("") }
-    var currency by remember { mutableStateOf("SGD") }
-    var receiptDate by remember { mutableStateOf(LocalDate.now().toString()) }
-    var categoryId by remember { mutableStateOf<Int?>(null) }
-    var description by remember { mutableStateOf("") }
-    var note by remember { mutableStateOf("") }
-    var sourceUri by remember { mutableStateOf<Uri?>(null) }
+    var amount by rememberSaveable { mutableStateOf("") }
+    var currency by rememberSaveable { mutableStateOf("SGD") }
+    var receiptDate by rememberSaveable { mutableStateOf(LocalDate.now().toString()) }
+    var categoryId by rememberSaveable { mutableStateOf<Int?>(null) }
+    var description by rememberSaveable { mutableStateOf("") }
+    var note by rememberSaveable { mutableStateOf("") }
+    var sourceUri by rememberSaveable { mutableStateOf<Uri?>(null) }
     var showCamera by remember { mutableStateOf(false) }
     var categoryMenuOpen by remember { mutableStateOf(false) }
     var currencyMenuOpen by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
+    var error by rememberSaveable { mutableStateOf<String?>(null) }
     val requestCamera = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) showCamera = true else error = "Camera permission is required to capture a receipt."
     }
-    val pickImage = rememberLauncherForActivityResult(PickVisualMedia()) { uri -> if (uri != null) sourceUri = uri }
+    val pickImage = rememberLauncherForActivityResult(PickVisualMedia()) { uri ->
+        if (uri != null) {
+            sourceUri?.let { old ->
+                if (old.scheme == "file" && old.path?.startsWith(File(context.filesDir, "receipt-staging").absolutePath) == true) File(old.path!!).delete()
+            }
+            runCatching { context.contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+            sourceUri = uri
+        }
+    }
 
     LaunchedEffect(categories) { if (categoryId == null) categoryId = categories.firstOrNull()?.id }
 
@@ -87,6 +99,7 @@ fun AddReceiptScreen(onBack: () -> Unit, onSaved: () -> Unit, viewModel: Receipt
             OutlinedButton(onClick = { requestCamera.launch(Manifest.permission.CAMERA) }, modifier = Modifier.fillMaxWidth()) { Text("Take photo") }
             OutlinedButton(onClick = { pickImage.launch(PickVisualMediaRequest(PickVisualMedia.ImageOnly)) }, modifier = Modifier.fillMaxWidth()) { Text("Choose from gallery") }
             Text(if (sourceUri == null) "No receipt image selected" else "Receipt image selected")
+            sourceUri?.let { AsyncImage(model = it, contentDescription = "Selected receipt preview", modifier = Modifier.fillMaxWidth().heightIn(max = 240.dp)) }
             OutlinedTextField(amount, { amount = it }, label = { Text("Amount") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.fillMaxWidth())
             ExposedDropdownMenuBox(expanded = currencyMenuOpen, onExpandedChange = { currencyMenuOpen = !currencyMenuOpen }) {
                 OutlinedTextField(currency, {}, readOnly = true, label = { Text("Currency") }, trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(currencyMenuOpen) }, modifier = Modifier.menuAnchor().fillMaxWidth())
@@ -113,12 +126,22 @@ fun AddReceiptScreen(onBack: () -> Unit, onSaved: () -> Unit, viewModel: Receipt
                 onClick = {
                     val parsedAmount = amount.toBigDecimalOrNull()
                     val validDate = runCatching { LocalDate.parse(receiptDate.trim()) }.isSuccess
+                    val normalizedAmount = parsedAmount?.stripTrailingZeros()?.let { value ->
+                        value.takeIf { it.scale() <= 2 && it > java.math.BigDecimal.ZERO && it <= java.math.BigDecimal("1000000000") }
+                            ?.setScale(2, java.math.RoundingMode.UNNECESSARY)?.toPlainString()
+                    }
                     when {
                         sourceUri == null -> error = "Add a receipt image first."
-                        parsedAmount == null || parsedAmount <= java.math.BigDecimal.ZERO -> error = "Enter a valid amount."
+                        normalizedAmount == null -> error = "Enter an amount greater than 0 and no more than 1,000,000,000, with at most 2 decimal places."
                         !validDate -> error = "Enter a valid date as YYYY-MM-DD."
                         categoryId == null -> error = "Choose a classification."
-                        else -> viewModel.saveReceipt(amount.trim(), currency, receiptDate.trim(), categoryId!!, description.trim().ifBlank { null }, note.trim().ifBlank { null }, sourceUri!!, onSaved)
+                        else -> {
+                            val selectedImage = sourceUri!!
+                            viewModel.saveReceipt(normalizedAmount, currency, receiptDate.trim(), categoryId!!, description.trim().ifBlank { null }, note.trim().ifBlank { null }, selectedImage) {
+                                if (selectedImage.scheme == "file" && selectedImage.path?.startsWith(File(context.filesDir, "receipt-staging").absolutePath) == true) File(selectedImage.path!!).delete()
+                                onSaved()
+                            }
+                        }
                     }
                 },
                 modifier = Modifier.fillMaxWidth()

@@ -26,8 +26,12 @@ export async function closeDatabase() {
 
 if (provider === 'postgres') {
   if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required when DATABASE_PROVIDER=postgres.')
+  const sslMode = String(process.env.POSTGRES_SSL || 'verify-full').toLowerCase()
+  if (!['verify-full', 'require', 'disable'].includes(sslMode)) throw new Error('POSTGRES_SSL must be verify-full, require, or disable.')
   const postgresClient = postgres(process.env.DATABASE_URL, {
-    ssl: process.env.POSTGRES_SSL === 'disable' ? false : 'require',
+    // The postgres-js string value 'require' disables certificate verification.
+    // Keep the legacy env spelling, but always verify TLS unless disable is explicit.
+    ssl: sslMode === 'disable' ? false : { rejectUnauthorized: true },
     max: Number(process.env.POSTGRES_MAX_CONNECTIONS || 5),
   })
   client = postgresClient
