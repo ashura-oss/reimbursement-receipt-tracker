@@ -108,10 +108,9 @@ fun ClaimsScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             OutlinedTextField(title, { title = it }, label = { Text("Claim title") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(startDate, { startDate = it }, label = { Text("Start date (optional)") }, placeholder = { Text("YYYY-MM-DD") }, modifier = Modifier.weight(1f), singleLine = true)
-                OutlinedTextField(endDate, { endDate = it }, label = { Text("End date (optional)") }, placeholder = { Text("YYYY-MM-DD") }, modifier = Modifier.weight(1f), singleLine = true)
-            }
+            Text("Claim period (optional)")
+            OutlinedTextField(startDate, { startDate = it }, label = { Text("Start date") }, placeholder = { Text("YYYY-MM-DD") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+            OutlinedTextField(endDate, { endDate = it }, label = { Text("End date") }, placeholder = { Text("YYYY-MM-DD") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
             Text("Select receipts (${selectedReceipts.size} selected of ${availableReceipts.size} available)")
             availableReceipts.forEach { receipt ->
                 val selected = receipt.clientReceiptId in selectedReceiptIds

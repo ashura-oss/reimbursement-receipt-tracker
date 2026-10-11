@@ -15,7 +15,7 @@ import javax.inject.Singleton
 
 private val Context.sessionDataStore by preferencesDataStore(name = "secure_session")
 
-data class SessionSnapshot(val userId: Int, val accessToken: String)
+data class SessionSnapshot(val userId: Int, val accessToken: String, val username: String? = null)
 
 @Singleton
 class SessionStore @Inject constructor(
@@ -25,17 +25,32 @@ class SessionStore @Inject constructor(
     private val accessTokenKey = stringPreferencesKey("access_token_ciphertext")
     private val refreshTokenKey = stringPreferencesKey("refresh_token_ciphertext")
     private val userIdKey = stringPreferencesKey("user_id")
+    private val usernameKey = stringPreferencesKey("username")
 
-    suspend fun save(accessToken: String, refreshToken: String?, userId: Int? = null) {
+    suspend fun save(accessToken: String, refreshToken: String?, userId: Int? = null, username: String? = null) {
         context.sessionDataStore.edit { preferences ->
             preferences[accessTokenKey] = cipher.encrypt(accessToken)
             if (userId == null) preferences.remove(userIdKey) else preferences[userIdKey] = userId.toString()
+            if (username.isNullOrBlank()) preferences.remove(usernameKey) else preferences[usernameKey] = username.trim()
             if (refreshToken == null) preferences.remove(refreshTokenKey)
             else preferences[refreshTokenKey] = cipher.encrypt(refreshToken)
         }
     }
 
     suspend fun snapshot(): SessionSnapshot? = context.sessionDataStore.data.first().let(::snapshotFrom)
+
+    /** Clears only the credential that produced a failed request; a newer login is preserved. */
+    suspend fun clearIfAccessTokenMatches(accessToken: String): Boolean {
+        var cleared = false
+        context.sessionDataStore.edit { preferences ->
+            val storedToken = preferences[accessTokenKey]?.let { runCatching { cipher.decrypt(it) }.getOrNull() }
+            if (storedToken == accessToken) {
+                preferences.clear()
+                cleared = true
+            }
+        }
+        return cleared
+    }
 
     suspend fun accessToken(): String? = snapshot()?.accessToken
 
@@ -47,11 +62,12 @@ class SessionStore @Inject constructor(
 
     private fun snapshotFrom(preferences: androidx.datastore.preferences.core.Preferences): SessionSnapshot? {
         val token = preferences[accessTokenKey]?.let { runCatching { cipher.decrypt(it) }.getOrNull() } ?: return null
+        if (isJwtExpired(token, System.currentTimeMillis() / 1_000)) return null
         val jwtUserId = userIdFromJwt(token)
         val storedUserId = preferences[userIdKey]?.toIntOrNull()
         // The identity from the same signed-in token is authoritative; preference identity is a legacy fallback.
         val userId = jwtUserId ?: storedUserId ?: return null
-        return SessionSnapshot(userId, token)
+        return SessionSnapshot(userId, token, preferences[usernameKey])
     }
 
     private fun userIdFromJwt(token: String): Int? = runCatching {
@@ -59,6 +75,13 @@ class SessionStore @Inject constructor(
         JSONObject(String(Base64.decode(encodedPayload, Base64.URL_SAFE or Base64.NO_WRAP), Charsets.UTF_8))
             .optInt("userId").takeIf { it > 0 }
     }.getOrNull()
+
+    private fun isJwtExpired(token: String, nowEpochSeconds: Long): Boolean = runCatching {
+        val encodedPayload = token.split('.').getOrNull(1) ?: return@runCatching false
+        val claims = JSONObject(String(Base64.decode(encodedPayload, Base64.URL_SAFE or Base64.NO_WRAP), Charsets.UTF_8))
+        val expiresAt = claims.optLong("exp", 0L)
+        expiresAt > 0L && expiresAt <= nowEpochSeconds
+    }.getOrDefault(false)
 
     suspend fun clear() {
         context.sessionDataStore.edit { it.clear() }

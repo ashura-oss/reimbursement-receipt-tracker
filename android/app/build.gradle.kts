@@ -15,6 +15,15 @@ val localProperties = Properties().apply {
 val backendBaseUrl = localProperties.getProperty("BACKEND_BASE_URL")
     ?: providers.gradleProperty("BACKEND_BASE_URL").orNull
     ?: "https://example.invalid/api/"
+val releaseStoreFile = providers.environmentVariable("RECEIPT_RELEASE_STORE_FILE").orNull
+val releaseStorePassword = providers.environmentVariable("RECEIPT_RELEASE_STORE_PASSWORD").orNull
+val releaseKeyAlias = providers.environmentVariable("RECEIPT_RELEASE_KEY_ALIAS").orNull
+val releaseKeyPassword = providers.environmentVariable("RECEIPT_RELEASE_KEY_PASSWORD").orNull
+val releaseSigningConfigured = listOf(releaseStoreFile, releaseStorePassword, releaseKeyAlias, releaseKeyPassword).all { !it.isNullOrBlank() }
+val releaseTaskRequested = gradle.startParameter.taskNames.any { it.contains("Release", ignoreCase = true) && (it.contains("assemble", true) || it.contains("bundle", true) || it.contains("package", true)) }
+if (releaseTaskRequested && !releaseSigningConfigured) {
+    error("Release builds require RECEIPT_RELEASE_STORE_FILE, RECEIPT_RELEASE_STORE_PASSWORD, RECEIPT_RELEASE_KEY_ALIAS, and RECEIPT_RELEASE_KEY_PASSWORD environment variables.")
+}
 
 android {
     namespace = "com.receiptclaims.android"
@@ -29,6 +38,25 @@ android {
         versionName = "0.1.0"
 
         buildConfigField("String", "BACKEND_BASE_URL", "\"${backendBaseUrl.replace("\"", "\\\"")}\"")
+    }
+
+    signingConfigs {
+        if (releaseSigningConfigured) {
+            create("release") {
+                storeFile = file(releaseStoreFile!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
+    buildTypes {
+        getByName("release") {
+            isDebuggable = false
+            isMinifyEnabled = false
+            if (releaseSigningConfigured) signingConfig = signingConfigs.getByName("release")
+        }
     }
 
     buildFeatures {

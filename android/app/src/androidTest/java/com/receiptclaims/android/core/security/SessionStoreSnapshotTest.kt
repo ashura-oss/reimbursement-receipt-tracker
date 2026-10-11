@@ -9,6 +9,9 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
@@ -40,9 +43,31 @@ class SessionStoreSnapshotTest {
         store.clear()
     }
 
-    private fun tokenFor(userId: Int): String {
+    @Test
+    fun expiredJwtIsNotAnAuthenticatedSession() = runBlocking {
+        val expiredToken = tokenFor(303, expiresAt = System.currentTimeMillis() / 1_000 - 1)
+        store.save(expiredToken, refreshToken = null, userId = 303)
+
+        assertNull(store.snapshot())
+        assertNull(store.snapshotFlow().take(1).toList().single())
+    }
+
+    @Test
+    fun unauthorizedResponseOnlyClearsTheSessionThatSentItsToken() = runBlocking {
+        val oldToken = tokenFor(404)
+        val newToken = tokenFor(505)
+        store.save(oldToken, refreshToken = null, userId = 404)
+        store.save(newToken, refreshToken = null, userId = 505)
+
+        assertFalse(store.clearIfAccessTokenMatches(oldToken))
+        assertEquals(SessionSnapshot(505, newToken), store.snapshot())
+        assertTrue(store.clearIfAccessTokenMatches(newToken))
+        assertNull(store.snapshot())
+    }
+
+    private fun tokenFor(userId: Int, expiresAt: Long = System.currentTimeMillis() / 1_000 + 3600): String {
         val payload = Base64.encodeToString(
-            "{\"userId\":$userId}".toByteArray(Charsets.UTF_8),
+            "{\"userId\":$userId,\"exp\":$expiresAt}".toByteArray(Charsets.UTF_8),
             Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
         )
         return "header.$payload.signature"

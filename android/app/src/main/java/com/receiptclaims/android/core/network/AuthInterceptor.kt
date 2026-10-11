@@ -15,6 +15,14 @@ class AuthInterceptor @Inject constructor(
             if (chain.request().header("Authorization").isNullOrBlank() && !token.isNullOrBlank()) header("Authorization", "Bearer $token")
             addHeader("Accept", "application/json")
         }.build()
-        return chain.proceed(request)
+        val response = chain.proceed(request)
+        val authHeader = request.header("Authorization")
+        val requestedPath = request.url.encodedPath
+        val isPublicAuthRequest = requestedPath.endsWith("/auth/login") || requestedPath.endsWith("/auth/register")
+        if (response.code == 401 && !isPublicAuthRequest && authHeader?.startsWith("Bearer ") == true) {
+            val failedToken = authHeader.removePrefix("Bearer ").trim()
+            if (failedToken.isNotEmpty()) runBlocking { sessionStore.clearIfAccessTokenMatches(failedToken) }
+        }
+        return response
     }
 }

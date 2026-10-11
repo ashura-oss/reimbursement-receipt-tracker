@@ -31,7 +31,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -63,8 +62,7 @@ fun AddReceiptScreen(onBack: () -> Unit, onSaved: () -> Unit, viewModel: Receipt
     var note by rememberSaveable { mutableStateOf("") }
     var sourceUri by rememberSaveable { mutableStateOf<Uri?>(null) }
     var showCamera by remember { mutableStateOf(false) }
-    var categoryMenuOpen by remember { mutableStateOf(false) }
-    var currencyMenuOpen by remember { mutableStateOf(false) }
+    var expandedMenu by rememberSaveable { mutableStateOf<String?>(null) }
     var error by rememberSaveable { mutableStateOf<String?>(null) }
     val requestCamera = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) showCamera = true else error = "Camera permission is required to capture a receipt."
@@ -78,8 +76,6 @@ fun AddReceiptScreen(onBack: () -> Unit, onSaved: () -> Unit, viewModel: Receipt
             sourceUri = uri
         }
     }
-
-    LaunchedEffect(categories) { if (categoryId == null) categoryId = categories.firstOrNull()?.id }
 
     if (showCamera) {
         CameraCaptureScreen(onCaptured = { sourceUri = it; showCamera = false }, onCancel = { showCamera = false })
@@ -101,20 +97,20 @@ fun AddReceiptScreen(onBack: () -> Unit, onSaved: () -> Unit, viewModel: Receipt
             Text(if (sourceUri == null) "No receipt image selected" else "Receipt image selected")
             sourceUri?.let { AsyncImage(model = it, contentDescription = "Selected receipt preview", modifier = Modifier.fillMaxWidth().heightIn(max = 240.dp)) }
             OutlinedTextField(amount, { amount = it }, label = { Text("Amount") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.fillMaxWidth())
-            ExposedDropdownMenuBox(expanded = currencyMenuOpen, onExpandedChange = { currencyMenuOpen = !currencyMenuOpen }) {
-                OutlinedTextField(currency, {}, readOnly = true, label = { Text("Currency") }, trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(currencyMenuOpen) }, modifier = Modifier.menuAnchor().fillMaxWidth())
-                DropdownMenu(expanded = currencyMenuOpen, onDismissRequest = { currencyMenuOpen = false }) {
+            ExposedDropdownMenuBox(expanded = expandedMenu == "currency", onExpandedChange = { expandedMenu = if (it) "currency" else null }) {
+                OutlinedTextField(currency, {}, readOnly = true, label = { Text("Currency") }, trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expandedMenu == "currency") }, modifier = Modifier.menuAnchor().fillMaxWidth())
+                DropdownMenu(expanded = expandedMenu == "currency", onDismissRequest = { expandedMenu = null }) {
                     listOf("SGD", "INR", "USD", "EUR", "GBP", "AUD", "MYR", "THB", "JPY", "CNY").forEach { option ->
-                        DropdownMenuItem(text = { Text(option) }, onClick = { currency = option; currencyMenuOpen = false })
+                        DropdownMenuItem(text = { Text(option) }, onClick = { currency = option; expandedMenu = null })
                     }
                 }
             }
             OutlinedTextField(receiptDate, { receiptDate = it }, label = { Text("Receipt date (YYYY-MM-DD)") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii), modifier = Modifier.fillMaxWidth())
-            ExposedDropdownMenuBox(expanded = categoryMenuOpen, onExpandedChange = { categoryMenuOpen = !categoryMenuOpen }) {
+            ExposedDropdownMenuBox(expanded = expandedMenu == "category", onExpandedChange = { expandedMenu = if (it) "category" else null }) {
                 val selectedCategory = categories.firstOrNull { it.id == categoryId }
-                OutlinedTextField(selectedCategory?.name ?: "Select classification", {}, readOnly = true, label = { Text("Classification") }, trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(categoryMenuOpen) }, modifier = Modifier.menuAnchor().fillMaxWidth())
-                DropdownMenu(expanded = categoryMenuOpen, onDismissRequest = { categoryMenuOpen = false }) {
-                    categories.forEach { category -> DropdownMenuItem(text = { Text(category.name) }, onClick = { categoryId = category.id; categoryMenuOpen = false }) }
+                OutlinedTextField(selectedCategory?.name ?: "Choose a classification", {}, readOnly = true, label = { Text("Classification (required)") }, trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expandedMenu == "category") }, modifier = Modifier.menuAnchor().fillMaxWidth())
+                DropdownMenu(expanded = expandedMenu == "category", onDismissRequest = { expandedMenu = null }) {
+                    categories.forEach { category -> DropdownMenuItem(text = { Text(category.name) }, onClick = { categoryId = category.id; expandedMenu = null }) }
                 }
             }
             OutlinedTextField(description, { description = it }, label = { Text("Description (optional)") }, modifier = Modifier.fillMaxWidth())

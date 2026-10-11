@@ -3,6 +3,7 @@ package com.receiptclaims.android.ui
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -35,6 +36,17 @@ fun ReceiptClaimsApp() {
     val sessionViewModel: SessionViewModel = hiltViewModel()
     val sessionState by sessionViewModel.state.collectAsStateWithLifecycle()
     if (sessionState.loading) return
+    LaunchedEffect(sessionState.authenticated) {
+        if (!sessionState.authenticated) {
+            val currentRoute = navController.currentBackStackEntry?.destination?.route
+            if (currentRoute != null && currentRoute != Destinations.LOGIN && currentRoute != Destinations.REGISTER) {
+                navController.navigate(Destinations.LOGIN) {
+                    popUpTo(navController.graph.id) { inclusive = true }
+                    launchSingleTop = true
+                }
+            }
+        }
+    }
     Surface(modifier = Modifier.fillMaxSize()) {
         NavHost(navController = navController, startDestination = if (sessionState.authenticated) Destinations.HOME else Destinations.LOGIN) {
             composable(Destinations.LOGIN) {
@@ -61,7 +73,8 @@ fun ReceiptClaimsApp() {
                         sessionViewModel.logout {
                             navController.navigate(Destinations.LOGIN) { popUpTo(navController.graph.id) { inclusive = true } }
                         }
-                    }
+                    },
+                    username = sessionState.username
                 )
             }
             composable(Destinations.RECEIPTS) {
