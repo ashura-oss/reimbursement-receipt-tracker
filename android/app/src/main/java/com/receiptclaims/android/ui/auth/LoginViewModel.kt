@@ -22,7 +22,7 @@ class LoginViewModel @Inject constructor(
     private val _state = MutableStateFlow(LoginUiState())
     val state: StateFlow<LoginUiState> = _state.asStateFlow()
 
-    fun login(username: String, password: String, onSuccess: () -> Unit) {
+    fun login(username: String, password: String) {
         if (username.isBlank() || password.isBlank()) {
             _state.value = LoginUiState(error = "Enter your username and password.")
             return
@@ -36,7 +36,6 @@ class LoginViewModel @Inject constructor(
                     else {
                         sessionStore.save(payload.token, null, payload.user.id, payload.user.username.ifBlank { username.trim() })
                         _state.value = LoginUiState()
-                        onSuccess()
                     }
                 }
                 .onFailure { _state.value = LoginUiState(error = it.message ?: "Unable to sign in.") }

@@ -40,11 +40,10 @@ class SessionViewModel @Inject constructor(
         }
     }
 
-    fun logout(onLoggedOut: () -> Unit) {
+    fun logout() {
         viewModelScope.launch {
             sessionStore.clear()
             File(context.cacheDir, "report-downloads").deleteRecursively()
-            onLoggedOut()
         }
     }
 }

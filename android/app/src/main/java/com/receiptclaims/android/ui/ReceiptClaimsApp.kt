@@ -1,10 +1,15 @@
 package com.receiptclaims.android.ui
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
@@ -31,61 +36,60 @@ private object Destinations {
 
 @Composable
 fun ReceiptClaimsApp() {
-    val navController = rememberNavController()
     val loginViewModel: LoginViewModel = hiltViewModel()
     val sessionViewModel: SessionViewModel = hiltViewModel()
     val sessionState by sessionViewModel.state.collectAsStateWithLifecycle()
     if (sessionState.loading) return
-    LaunchedEffect(sessionState.authenticated) {
-        if (!sessionState.authenticated) {
-            val currentRoute = navController.currentBackStackEntry?.destination?.route
-            if (currentRoute != null && currentRoute != Destinations.LOGIN && currentRoute != Destinations.REGISTER) {
-                navController.navigate(Destinations.LOGIN) {
-                    popUpTo(navController.graph.id) { inclusive = true }
-                    launchSingleTop = true
+    // Authentication is the navigation root: replacing the graph on session changes avoids
+    // competing callback/effect back-stack mutations during login, logout, and token expiry.
+    key(sessionState.authenticated) {
+        val navController = rememberNavController()
+        Surface(modifier = Modifier.fillMaxSize()) {
+            NavHost(navController = navController, startDestination = if (sessionState.authenticated) Destinations.HOME else Destinations.LOGIN) {
+                composable(Destinations.LOGIN) {
+                    LoginScreen(
+                        viewModel = loginViewModel,
+                        onCreateAccount = { navController.navigate(Destinations.REGISTER) }
+                    )
+                }
+                composable(Destinations.REGISTER) {
+                    val registerViewModel: RegisterViewModel = hiltViewModel()
+                    RegisterScreen(
+                        viewModel = registerViewModel,
+                        onBack = { navController.popBackStack() },
+                        onCreated = { navController.popBackStack() }
+                    )
+                }
+                composable(Destinations.HOME) {
+                    val activity = LocalContext.current.findActivity()
+                    BackHandler {
+                        // Android's root-task Back behavior backgrounds the app and preserves Home.
+                        if (activity?.moveTaskToBack(true) != true) activity?.finish()
+                    }
+                    HomeScreen(
+                        onReceipts = { navController.navigate(Destinations.RECEIPTS) },
+                        onAddReceipt = { navController.navigate(Destinations.ADD_RECEIPT) },
+                        onClaims = { navController.navigate(Destinations.CLAIMS) },
+                        onLogout = { sessionViewModel.logout() },
+                        username = sessionState.username
+                    )
+                }
+                composable(Destinations.RECEIPTS) {
+                    ReceiptListScreen(onBack = { navController.popBackStack() })
+                }
+                composable(Destinations.ADD_RECEIPT) {
+                    AddReceiptScreen(onBack = { navController.popBackStack() }, onSaved = { navController.popBackStack() })
+                }
+                composable(Destinations.CLAIMS) {
+                    ClaimsScreen(onBack = { navController.popBackStack() })
                 }
             }
         }
     }
-    Surface(modifier = Modifier.fillMaxSize()) {
-        NavHost(navController = navController, startDestination = if (sessionState.authenticated) Destinations.HOME else Destinations.LOGIN) {
-            composable(Destinations.LOGIN) {
-                LoginScreen(
-                    viewModel = loginViewModel,
-                    onLoggedIn = { navController.navigate(Destinations.HOME) { popUpTo(Destinations.LOGIN) { inclusive = true } } },
-                    onCreateAccount = { navController.navigate(Destinations.REGISTER) }
-                )
-            }
-            composable(Destinations.REGISTER) {
-                val registerViewModel: RegisterViewModel = hiltViewModel()
-                RegisterScreen(
-                    viewModel = registerViewModel,
-                    onBack = { navController.popBackStack() },
-                    onCreated = { navController.popBackStack() }
-                )
-            }
-            composable(Destinations.HOME) {
-                HomeScreen(
-                    onReceipts = { navController.navigate(Destinations.RECEIPTS) },
-                    onAddReceipt = { navController.navigate(Destinations.ADD_RECEIPT) },
-                    onClaims = { navController.navigate(Destinations.CLAIMS) },
-                    onLogout = {
-                        sessionViewModel.logout {
-                            navController.navigate(Destinations.LOGIN) { popUpTo(navController.graph.id) { inclusive = true } }
-                        }
-                    },
-                    username = sessionState.username
-                )
-            }
-            composable(Destinations.RECEIPTS) {
-                ReceiptListScreen(onBack = { navController.popBackStack() })
-            }
-            composable(Destinations.ADD_RECEIPT) {
-                AddReceiptScreen(onBack = { navController.popBackStack() }, onSaved = { navController.popBackStack() })
-            }
-            composable(Destinations.CLAIMS) {
-                ClaimsScreen(onBack = { navController.popBackStack() })
-            }
-        }
-    }
+}
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
 }

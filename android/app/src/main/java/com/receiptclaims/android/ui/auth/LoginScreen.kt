@@ -27,7 +27,7 @@ import androidx.compose.ui.unit.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LoginScreen(viewModel: LoginViewModel, onLoggedIn: () -> Unit, onCreateAccount: () -> Unit) {
+fun LoginScreen(viewModel: LoginViewModel, onCreateAccount: () -> Unit) {
     val state by viewModel.state.collectAsState()
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -47,7 +47,7 @@ fun LoginScreen(viewModel: LoginViewModel, onLoggedIn: () -> Unit, onCreateAccou
             )
             state.error?.let { Text(it) }
             Button(
-                onClick = { viewModel.login(username, password, onLoggedIn) },
+                onClick = { viewModel.login(username, password) },
                 enabled = !state.loading,
                 modifier = Modifier.fillMaxWidth()
             ) {
