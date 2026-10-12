@@ -22,7 +22,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -30,7 +30,7 @@ import androidx.compose.ui.unit.dp
 fun LoginScreen(viewModel: LoginViewModel, onCreateAccount: () -> Unit) {
     val state by viewModel.state.collectAsState()
     var username by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf(TextFieldValue()) }
     Scaffold(topBar = { TopAppBar(title = { Text("Sign in") }) }) { padding ->
         Column(
             modifier = Modifier.fillMaxSize().padding(padding).padding(24.dp).imePadding().verticalScroll(rememberScrollState()),
@@ -38,16 +38,15 @@ fun LoginScreen(viewModel: LoginViewModel, onCreateAccount: () -> Unit) {
         ) {
             Text("Sign in to save receipts and create claims.")
             OutlinedTextField(username, { username = it }, label = { Text("Username") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(
-                password,
-                { password = it },
-                label = { Text("Password") },
-                visualTransformation = PasswordVisualTransformation(),
+            PasswordInputField(
+                value = password,
+                onValueChange = { password = it },
+                label = "Password",
                 modifier = Modifier.fillMaxWidth()
             )
             state.error?.let { Text(it) }
             Button(
-                onClick = { viewModel.login(username, password) },
+                onClick = { viewModel.login(username, password.text) },
                 enabled = !state.loading,
                 modifier = Modifier.fillMaxWidth()
             ) {

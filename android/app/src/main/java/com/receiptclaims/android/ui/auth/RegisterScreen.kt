@@ -26,7 +26,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -35,7 +35,7 @@ fun RegisterScreen(viewModel: RegisterViewModel, onBack: () -> Unit, onCreated: 
     val state by viewModel.state.collectAsState()
     var username by remember { mutableStateOf("") }
     var displayName by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf(TextFieldValue()) }
     Scaffold(topBar = {
         TopAppBar(
             title = { Text("Create account") },
@@ -49,10 +49,15 @@ fun RegisterScreen(viewModel: RegisterViewModel, onBack: () -> Unit, onCreated: 
             Text("Create a secure account to keep your receipts and claims private.")
             OutlinedTextField(displayName, { displayName = it }, label = { Text("Display name") }, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(username, { username = it }, label = { Text("Username") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(password, { password = it }, label = { Text("Password (8+ characters)") }, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+            PasswordInputField(
+                value = password,
+                onValueChange = { password = it },
+                label = "Password (8+ characters)",
+                modifier = Modifier.fillMaxWidth()
+            )
             state.error?.let { Text(it) }
             Button(
-                onClick = { viewModel.register(username, password, displayName, onCreated) },
+                onClick = { viewModel.register(username, password.text, displayName, onCreated) },
                 enabled = !state.loading,
                 modifier = Modifier.fillMaxWidth()
             ) { if (state.loading) CircularProgressIndicator() else Text("Create account") }
