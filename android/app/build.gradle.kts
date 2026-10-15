@@ -1,5 +1,3 @@
-import java.util.Properties
-
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -8,13 +6,6 @@ plugins {
     id("com.google.dagger.hilt.android")
 }
 
-val localProperties = Properties().apply {
-    val file = rootProject.file("local.properties")
-    if (file.exists()) file.inputStream().use(::load)
-}
-val backendBaseUrl = localProperties.getProperty("BACKEND_BASE_URL")
-    ?: providers.gradleProperty("BACKEND_BASE_URL").orNull
-    ?: "https://example.invalid/api/"
 val releaseStoreFile = providers.environmentVariable("RECEIPT_RELEASE_STORE_FILE").orNull
 val releaseStorePassword = providers.environmentVariable("RECEIPT_RELEASE_STORE_PASSWORD").orNull
 val releaseKeyAlias = providers.environmentVariable("RECEIPT_RELEASE_KEY_ALIAS").orNull
@@ -34,10 +25,12 @@ android {
         minSdk = 26
         targetSdk = 36
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "1.0.0"
+    }
 
-        buildConfigField("String", "BACKEND_BASE_URL", "\"${backendBaseUrl.replace("\"", "\\\"")}\"")
+    buildTypes.getByName("debug") {
+        applicationIdSuffix = ".qa"
     }
 
     signingConfigs {
@@ -61,7 +54,7 @@ android {
 
     buildFeatures {
         compose = true
-        buildConfig = true
+        buildConfig = false
     }
 
     compileOptions {
@@ -95,20 +88,11 @@ dependencies {
     implementation("com.google.dagger:hilt-android:2.53")
     ksp("com.google.dagger:hilt-compiler:2.53")
     implementation("androidx.hilt:hilt-navigation-compose:1.2.0")
-    implementation("androidx.hilt:hilt-work:1.2.0")
-    // Generates the WorkerAssistedFactory bindings consumed by HiltWorkerFactory.
-    ksp("androidx.hilt:hilt-compiler:1.2.0")
 
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
     ksp("androidx.room:room-compiler:2.6.1")
-    implementation("androidx.datastore:datastore-preferences:1.1.2")
     implementation("androidx.work:work-runtime-ktx:2.10.0")
-
-    implementation("com.squareup.retrofit2:retrofit:2.11.0")
-    implementation("com.squareup.retrofit2:converter-gson:2.11.0")
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
 
     implementation("androidx.camera:camera-camera2:1.4.1")
     implementation("androidx.camera:camera-lifecycle:1.4.1")
@@ -122,5 +106,5 @@ dependencies {
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:core:1.6.1")
-    androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
 }

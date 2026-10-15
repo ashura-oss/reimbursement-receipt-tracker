@@ -5,7 +5,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -24,7 +23,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -32,27 +30,21 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.receiptclaims.android.data.local.ReceiptEntity
 import com.receiptclaims.android.ui.receipts.ReceiptViewModel
 import java.io.File
+import kotlinx.coroutines.launch
 
-private val ReceiptSelectionSaver = Saver<androidx.compose.runtime.MutableState<Set<String>>, ArrayList<String>>(
-    save = { ArrayList(it.value) },
-    restore = { androidx.compose.runtime.mutableStateOf(it.toSet()) }
-)
-
-@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ClaimsScreen(
     onBack: () -> Unit,
@@ -60,146 +52,103 @@ fun ClaimsScreen(
     receiptViewModel: ReceiptViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val context = LocalContext.current
     val receipts by receiptViewModel.receipts.collectAsStateWithLifecycle()
+    val categories by receiptViewModel.categories.collectAsStateWithLifecycle()
     var title by rememberSaveable { mutableStateOf("") }
     var startDate by rememberSaveable { mutableStateOf("") }
     var endDate by rememberSaveable { mutableStateOf("") }
-    val selectedReceiptIdsState = rememberSaveable(saver = ReceiptSelectionSaver) { mutableStateOf<Set<String>>(emptySet()) }
-    var selectedReceiptIds by selectedReceiptIdsState
-    var pendingSaveFileId by rememberSaveable { mutableStateOf<Int?>(null) }
-    var previousAccountId by remember { mutableStateOf<Int?>(null) }
-    androidx.compose.runtime.LaunchedEffect(state.accountUserId) {
-        val currentAccountId = state.accountUserId
-        if (currentAccountId != null && previousAccountId != null && currentAccountId != previousAccountId) {
-            title = ""
-            startDate = ""
-            endDate = ""
-            selectedReceiptIds = emptySet()
+    var selected by rememberSaveable { mutableStateOf<Set<String>>(emptySet()) }
+    var pendingFileId by rememberSaveable { mutableStateOf<Long?>(null) }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val saveFile = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val targetId = pendingFileId
+        val uri = result.data?.data
+        if (result.resultCode == android.app.Activity.RESULT_OK && targetId != null && uri != null) {
+            scope.launch { viewModel.saveToUri(targetId, uri) }
         }
-        if (currentAccountId != null) previousAccountId = currentAccountId
+        pendingFileId = null
     }
-    val saveFileLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        val fileId = pendingSaveFileId
-        val destination = result.data?.data
-        if (result.resultCode == android.app.Activity.RESULT_OK && fileId != null && destination != null) {
-            viewModel.saveToUri(context, fileId, destination)
-        }
-        pendingSaveFileId = null
-    }
-    val claimedReceiptIds = state.claims.flatMap { claim ->
-        claim.receipts.orEmpty().map { it.id.toString() } + claim.receiptIds.orEmpty()
-    }.toSet()
-    val availableReceipts = receipts.filter {
-        it.serverId != null &&
-            it.status == ReceiptEntity.STATUS_UPLOADED &&
-            it.serverId !in claimedReceiptIds
-    }
-    val selectedReceipts = availableReceipts.filter { it.clientReceiptId in selectedReceiptIds }
+    fun identity(receipt: ReceiptEntity) = "${receipt.ownerUserId}:${receipt.clientReceiptId}"
+    val alreadyClaimed = state.claims.flatMap { claim -> claim.receipts }.map(::identity).toSet()
+    val available = receipts.filter { it.status == ReceiptEntity.STATUS_SAVED && identity(it) !in alreadyClaimed }
+    val selectedReceipts = available.filter { identity(it) in selected }
+    val selectedRatesReady = selectedReceipts.all { it.exchangeRate != null && it.sgdEquivalent != null }
+    val selectedImages = selectedReceipts.map { File(it.imagePath) }
+    val selectedImagesReady = selectedImages.all { it.isFile && it.length() in 1..(10L * 1024 * 1024) } && selectedImages.sumOf { if (it.isFile) it.length() else 0L } <= 50L * 1024 * 1024
 
     Scaffold(topBar = {
-        TopAppBar(
-            title = { Text("Claims and reports") },
-            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } }
-        )
+        TopAppBar(title = { Text("Claims and reports") }, navigationIcon = {
+            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+        })
     }) { padding ->
         Column(
             Modifier.fillMaxSize().padding(padding).padding(horizontal = 20.dp).verticalScroll(rememberScrollState()).imePadding(),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            Text("Claims and reports are created and saved on this device.")
+            OutlinedTextField(state.claimantName, viewModel::setClaimantName, label = { Text("Claimant name (optional)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
             OutlinedTextField(title, { title = it }, label = { Text("Claim title") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
             Text("Claim period (optional)")
-            OutlinedTextField(startDate, { startDate = it }, label = { Text("Start date") }, placeholder = { Text("YYYY-MM-DD") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-            OutlinedTextField(endDate, { endDate = it }, label = { Text("End date") }, placeholder = { Text("YYYY-MM-DD") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-            Text("Select receipts (${selectedReceipts.size} selected of ${availableReceipts.size} available)")
-            availableReceipts.forEach { receipt ->
-                val selected = receipt.clientReceiptId in selectedReceiptIds
+            OutlinedTextField(startDate, { startDate = it }, label = { Text("Start date (YYYY-MM-DD)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+            OutlinedTextField(endDate, { endDate = it }, label = { Text("End date (YYYY-MM-DD)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+            Text("Choose receipts (${selectedReceipts.size} selected of ${available.size} available)")
+            Text("A claim supports up to 500 receipts, 10 MiB per photo, and 50 MiB of photos total.")
+            if (!selectedRatesReady && selectedReceipts.isNotEmpty()) Text("Set a manual exchange rate for each selected foreign-currency receipt in My receipts before creating this claim.")
+            if (!selectedImagesReady && selectedReceipts.isNotEmpty()) Text("Every selected receipt needs a saved photo within the claim size limits.")
+            available.forEach { receipt ->
+                val key = identity(receipt)
                 Card(Modifier.fillMaxWidth()) {
                     Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Checkbox(
-                            modifier = Modifier.semantics {
-                                contentDescription = "Select receipt ${receipt.description?.takeIf(String::isNotBlank) ?: receipt.serverId}, ${receipt.currency} ${receipt.amount}, dated ${receipt.receiptDate}"
-                            },
-                            checked = selected,
-                            onCheckedChange = { checked ->
-                                selectedReceiptIds = if (checked) selectedReceiptIds + receipt.clientReceiptId
-                                else selectedReceiptIds - receipt.clientReceiptId
-                            }
-                        )
+                        Checkbox(checked = key in selected, enabled = key in selected || selected.size < 500, onCheckedChange = { checked ->
+                            selected = if (checked) selected + key else selected - key
+                        })
                         Column(Modifier.weight(1f).padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text("${receipt.currency} ${receipt.amount} · ${receipt.receiptDate}")
-                            Text(receipt.description?.takeIf(String::isNotBlank) ?: "Receipt ${receipt.serverId}")
+                            val categoryName = categories.firstOrNull { it.id == receipt.categoryId }?.name ?: "Classification"
+                            val displayName = receipt.name?.takeIf(String::isNotBlank) ?: receipt.description?.takeIf(String::isNotBlank)
+                            Text(displayName ?: "$categoryName · ${receipt.receiptDate}")
+                            if (displayName != null) Text("$categoryName · ${receipt.receiptDate}")
+                            receipt.sgdEquivalent?.let { Text("SGD $it") } ?: Text("SGD total unavailable")
                         }
                         if (receipt.imagePath.isNotBlank() && File(receipt.imagePath).exists()) {
-                            AsyncImage(
-                                model = File(receipt.imagePath),
-                                contentDescription = "Receipt image",
-                                modifier = Modifier.padding(4.dp).size(72.dp)
-                            )
-                        }
+                            AsyncImage(model = File(receipt.imagePath), contentDescription = "Receipt image", modifier = Modifier.padding(4.dp).size(64.dp))
+                        } else Text("Photo unavailable")
                     }
                 }
             }
-            if (availableReceipts.isEmpty()) Text("No unclaimed uploaded receipts are available.")
+            if (available.isEmpty()) Text("No unclaimed receipts are available.")
             Button(
-                onClick = {
-                    viewModel.createClaim(title, startDate, endDate, selectedReceipts) {
-                        title = ""
-                        startDate = ""
-                        endDate = ""
-                        selectedReceiptIds = emptySet()
-                    }
-                },
-                enabled = !state.loading && selectedReceipts.isNotEmpty(),
+                onClick = { viewModel.createClaim(title, startDate, endDate, selectedReceipts) { title = ""; startDate = ""; endDate = ""; selected = emptySet() } },
+                enabled = !state.loading && selectedReceipts.isNotEmpty() && selectedRatesReady && selectedImagesReady,
                 modifier = Modifier.fillMaxWidth()
-            ) { Text(if (state.loading) "Creating…" else "Create claim (${selectedReceipts.size} receipts)") }
+            ) { Text(if (state.loading) "Saving…" else "Create claim (${selectedReceipts.size} receipts)") }
             state.error?.let { Text(it) }
-            state.downloadMessage?.let { Text(it) }
+            state.message?.let { Text(it) }
             Text("Your claims")
-            TextButton(onClick = viewModel::refresh, enabled = !state.loading) { Text(if (state.loading) "Refreshing claims…" else "Refresh claims") }
-            if (state.error != null && state.claims.isEmpty()) {
-                OutlinedButton(onClick = viewModel::refresh, enabled = !state.loading) { Text("Retry loading claims") }
-            }
-            state.claims.forEach { claim ->
+            if (state.claims.isEmpty()) Text("No claims saved yet.")
+            state.claims.forEach { localClaim ->
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(claim.title?.takeIf(String::isNotBlank) ?: "Claim #${claim.id}")
-                        Text("Status: ${claim.status}")
-                        Button(
-                            onClick = { viewModel.generateReport(claim.id) },
-                            enabled = state.generatingClaimId == null && !state.loading
-                        ) {
-                            Text(if (state.generatingClaimId == claim.id) "Generating…" else "Generate report")
+                        Text(localClaim.claim.title)
+                        Text(claimReceiptSummary(localClaim.receipts.size, localClaim.claim.startDate, localClaim.claim.endDate))
+                        Button(onClick = { viewModel.generateReport(localClaim) }, enabled = state.generatingClaimId == null) {
+                            Text(if (state.generatingClaimId == localClaim.claim.id) "Creating reports…" else "Generate reports")
                         }
-                        if (state.reports[claim.id] == null) {
-                            OutlinedButton(
-                                onClick = { viewModel.loadLatestReport(claim.id) },
-                                enabled = state.loadingReportClaimId == null && !state.loading
-                            ) { Text(if (state.loadingReportClaimId == claim.id) "Loading saved files…" else "Load saved report files") }
-                        }
-                        state.reports[claim.id]?.let { report ->
-                            Text("Report ${report.report?.status ?: "available"}")
-                            report.files.forEach { file ->
-                                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    Text("${file.fileType}: ${file.fileName}")
-                                    Button(
-                                        onClick = { viewModel.downloadFile(context, file) },
-                                        enabled = state.downloadingFileId == null
-                                    ) { Text(if (state.downloadingFileId == file.id) "Downloading…" else "Download") }
-                                    if (state.cachedFiles[file.id] != null) {
-                                        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                            OutlinedButton(onClick = { viewModel.openFile(context, file) }) { Text("Open") }
-                                            OutlinedButton(onClick = { viewModel.shareFile(context, file) }) { Text("Share") }
-                                            OutlinedButton(onClick = {
-                                                pendingSaveFileId = file.id
-                                                saveFileLauncher.launch(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-                                                    addCategory(Intent.CATEGORY_OPENABLE)
-                                                    type = file.mimeType
-                                                    putExtra(Intent.EXTRA_TITLE, file.fileName)
-                                                })
-                                            }) { Text("Save as…") }
-                                        }
-                                    }
+                        latestReportsByType(localClaim.files).forEach { file ->
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text("${file.type}: ${file.name}")
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    OutlinedButton(onClick = { viewModel.openFile(file) }) { Text("Open") }
+                                    OutlinedButton(onClick = { viewModel.shareFile(file) }) { Text("Share") }
+                                    OutlinedButton(onClick = {
+                                        pendingFileId = file.id
+                                        saveFile.launch(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                                            addCategory(Intent.CATEGORY_OPENABLE)
+                                            type = file.mimeType
+                                            putExtra(Intent.EXTRA_TITLE, file.name)
+                                        })
+                                    }) { Text("Save as…") }
                                 }
                             }
                         }

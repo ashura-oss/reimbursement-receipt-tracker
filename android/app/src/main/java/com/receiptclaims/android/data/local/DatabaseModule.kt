@@ -23,11 +23,33 @@ object DatabaseModule {
         }
     }
 
+    internal val MIGRATION_3_4 = object : Migration(3, 4) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE receipts ADD COLUMN exchangeRate TEXT")
+            db.execSQL("ALTER TABLE receipts ADD COLUMN sgdEquivalent TEXT")
+            db.execSQL("UPDATE receipts SET exchangeRate = '1', sgdEquivalent = amount WHERE currency = 'SGD'")
+            db.execSQL("UPDATE receipts SET status = 'SAVED', errorMessage = NULL WHERE status != 'CLAIMED'")
+            db.execSQL("ALTER TABLE categories ADD COLUMN accountCode TEXT")
+            db.execSQL("CREATE TABLE IF NOT EXISTS claims (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, title TEXT NOT NULL, startDate TEXT, endDate TEXT, claimantName TEXT NOT NULL, createdAt INTEGER NOT NULL)")
+            db.execSQL("CREATE TABLE IF NOT EXISTS claim_receipts (claimId INTEGER NOT NULL, receiptOwnerUserId INTEGER NOT NULL, receiptClientReceiptId TEXT NOT NULL, PRIMARY KEY(claimId, receiptOwnerUserId, receiptClientReceiptId), FOREIGN KEY(claimId) REFERENCES claims(id) ON UPDATE NO ACTION ON DELETE CASCADE, FOREIGN KEY(receiptOwnerUserId, receiptClientReceiptId) REFERENCES receipts(ownerUserId, clientReceiptId) ON UPDATE NO ACTION ON DELETE CASCADE)")
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_claim_receipts_receiptOwnerUserId_receiptClientReceiptId ON claim_receipts(receiptOwnerUserId, receiptClientReceiptId)")
+            db.execSQL("CREATE TABLE IF NOT EXISTS report_files (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, claimId INTEGER NOT NULL, type TEXT NOT NULL, name TEXT NOT NULL, mimeType TEXT NOT NULL, path TEXT NOT NULL, createdAt INTEGER NOT NULL, FOREIGN KEY(claimId) REFERENCES claims(id) ON UPDATE NO ACTION ON DELETE CASCADE)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_report_files_claimId ON report_files(claimId)")
+            db.execSQL("CREATE TABLE IF NOT EXISTS local_settings (`key` TEXT NOT NULL PRIMARY KEY, value TEXT NOT NULL)")
+        }
+    }
+
+    internal val MIGRATION_4_5 = object : Migration(4, 5) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE receipts ADD COLUMN name TEXT")
+        }
+    }
+
     @Provides
     @Singleton
     fun database(@ApplicationContext context: Context): AppDatabase =
         Room.databaseBuilder(context, AppDatabase::class.java, "receipt_claims.db")
-            .addMigrations(MIGRATION_2_3)
+            .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
             .build()
 
     @Provides
@@ -35,4 +57,8 @@ object DatabaseModule {
 
     @Provides
     fun categoryDao(database: AppDatabase): CategoryDao = database.categoryDao()
+
+    @Provides fun claimDao(database: AppDatabase): ClaimDao = database.claimDao()
+    @Provides fun reportFileDao(database: AppDatabase): ReportFileDao = database.reportFileDao()
+    @Provides fun localSettingDao(database: AppDatabase): LocalSettingDao = database.localSettingDao()
 }

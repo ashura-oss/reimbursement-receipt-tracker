@@ -1,178 +1,130 @@
 package com.receiptclaims.android.data.repository
 
-import android.content.Context
-import com.receiptclaims.android.core.network.ApiService
-import com.receiptclaims.android.core.security.SessionStore
-import com.receiptclaims.android.core.security.SessionSnapshot
+import androidx.room.withTransaction
+import com.receiptclaims.android.data.local.AppDatabase
+import com.receiptclaims.android.data.local.ClaimEntity
+import com.receiptclaims.android.data.local.ClaimReceiptCrossRef
 import com.receiptclaims.android.data.local.ReceiptDao
 import com.receiptclaims.android.data.local.ReceiptEntity
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import dagger.hilt.android.qualifiers.ApplicationContext
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.MultipartBody
-import okhttp3.RequestBody.Companion.asRequestBody
-import okhttp3.RequestBody.Companion.toRequestBody
+import java.math.BigDecimal
+import java.math.RoundingMode
 import java.io.File
+import android.graphics.BitmapFactory
+import java.time.LocalDate
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
 class ReceiptRepository @Inject constructor(
-    @ApplicationContext private val context: Context,
-    private val api: ApiService,
     private val dao: ReceiptDao,
-    private val sessionStore: SessionStore
+    private val database: AppDatabase
 ) {
-    class AccountMismatchException : IllegalStateException("Sign in with the account that owns this receipt to upload it.")
-    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-    fun observeReceipts(): Flow<List<ReceiptEntity>> = sessionStore.userIdFlow()
-        .distinctUntilChanged()
-        .flatMapLatest { userId -> if (userId == null) flowOf(emptyList()) else dao.observeForUser(userId) }
+    companion object { const val LOCAL_OWNER_ID = 0 }
 
-    suspend fun createDraft(
-        expectedSession: SessionSnapshot,
+    fun observeReceipts(): Flow<List<ReceiptEntity>> = dao.observeAll()
+
+    suspend fun createReceipt(
+        name: String?,
         amount: String,
         currency: String,
+        exchangeRate: String?,
         receiptDate: String,
         categoryId: Int,
         description: String?,
         note: String?,
         imagePath: String
     ): String {
-        require(sessionStore.snapshot() == expectedSession) { "Your signed-in account changed before the receipt could be saved." }
-        val ownerUserId = expectedSession.userId
+        val parsedAmount = validatePositiveAmount(amount, "Amount")
+        require(currency.matches(Regex("[A-Z]{3}"))) { "Choose a valid three-letter currency." }
+        val rate = if (currency == "SGD") BigDecimal.ONE else validatePositiveAmount(requireNotNull(exchangeRate) { "Enter the exchange rate to SGD." }, "Exchange rate", maxScale = 8)
+        val sgd = parsedAmount.multiply(rate).setScale(2, RoundingMode.HALF_UP)
+        require(runCatching { LocalDate.parse(receiptDate) }.isSuccess) { "Enter a valid date as YYYY-MM-DD." }
+        require(imagePath.isNotBlank()) { "Add a receipt image first." }
+        require((description?.length ?: 0) <= 2_000 && (note?.length ?: 0) <= 2_000) { "Description and note can each be at most 2,000 characters." }
+        require((name?.length ?: 0) <= 120) { "Receipt name can be at most 120 characters." }
         val clientId = UUID.randomUUID().toString()
-        dao.upsert(
-            ReceiptEntity(
-                clientReceiptId = clientId,
-                ownerUserId = ownerUserId,
-                amount = amount,
-                currency = currency,
-                receiptDate = receiptDate,
-                categoryId = categoryId,
-                description = description,
-                note = note,
-                imagePath = imagePath,
-                status = ReceiptEntity.STATUS_PENDING_UPLOAD
-            )
-        )
+        dao.upsert(ReceiptEntity(
+            clientReceiptId = clientId,
+            ownerUserId = LOCAL_OWNER_ID,
+            name = name?.trim()?.takeIf(String::isNotEmpty),
+            amount = parsedAmount.stripTrailingZeros().toPlainString(),
+            currency = currency,
+            exchangeRate = rate.stripTrailingZeros().toPlainString(),
+            sgdEquivalent = sgd.toPlainString(),
+            receiptDate = receiptDate,
+            categoryId = categoryId,
+            description = description,
+            note = note,
+            imagePath = imagePath,
+            status = ReceiptEntity.STATUS_SAVED
+        ))
         return clientId
     }
 
-    suspend fun upload(clientId: String, expectedOwnerUserId: Int) {
-        val snapshot = sessionStore.snapshot() ?: throw AccountMismatchException()
-        if (snapshot.userId != expectedOwnerUserId) throw AccountMismatchException()
-        val receipt = dao.findForUser(expectedOwnerUserId, clientId) ?: return
-        dao.updateStatus(expectedOwnerUserId, clientId, ReceiptEntity.STATUS_UPLOADING)
-        try {
-            val file = File(receipt.imagePath)
-            require(file.exists()) { "Receipt image is missing." }
-            val image = MultipartBody.Part.createFormData(
-                "image",
-                file.name,
-                file.asRequestBody("image/jpeg".toMediaType())
-            )
-            val plain = "text/plain".toMediaType()
-            val response = api.uploadReceipt(
-                image = image,
-                clientReceiptId = receipt.clientReceiptId.toRequestBody(plain),
-                amount = receipt.amount.toRequestBody(plain),
-                currency = receipt.currency.toRequestBody(plain),
-                receiptDate = receipt.receiptDate.toRequestBody(plain),
-                categoryId = receipt.categoryId.toString().toRequestBody(plain),
-                description = receipt.description?.toRequestBody(plain),
-                note = receipt.note?.toRequestBody(plain),
-                authorization = "Bearer ${snapshot.accessToken}"
-            )
-            val serverReceipt = requireNotNull(response.data) { "Receipt response was empty." }
-            val active = sessionStore.snapshot()
-            if (active?.userId != snapshot.userId || active.accessToken != snapshot.accessToken) throw AccountMismatchException()
-            dao.markUploaded(expectedOwnerUserId, clientId, serverReceipt.id.toString())
-        } catch (cancelled: kotlinx.coroutines.CancellationException) {
-            dao.updateStatus(expectedOwnerUserId, clientId, ReceiptEntity.STATUS_PENDING_UPLOAD)
-            throw cancelled
-        } catch (error: Throwable) {
-            dao.updateStatus(expectedOwnerUserId, clientId, ReceiptEntity.STATUS_FAILED, error.message ?: "Upload failed")
-            throw error
+    suspend fun createClaim(title: String, startDate: String?, endDate: String?, receipts: List<ReceiptEntity>, claimantName: String): Long {
+        val cleanTitle = title.trim()
+        require(cleanTitle.isNotEmpty() && cleanTitle.length <= 120) { "Enter a claim title up to 120 characters." }
+        fun date(value: String?): String? = value?.trim()?.takeIf(String::isNotEmpty)?.also {
+            require(runCatching { LocalDate.parse(it) }.isSuccess) { "Enter valid dates as YYYY-MM-DD." }
+        }
+        val start = date(startDate)
+        val end = date(endDate)
+        require(start == null || end == null || !LocalDate.parse(end).isBefore(LocalDate.parse(start))) { "The end date must not precede the start date." }
+        require(receipts.isNotEmpty()) { "Select at least one receipt." }
+        require(receipts.size <= 500) { "A claim can contain at most 500 receipts." }
+        require(receipts.map { it.ownerUserId to it.clientReceiptId }.toSet().size == receipts.size) { "A receipt can only appear once in a claim." }
+        require(receipts.all { it.status == ReceiptEntity.STATUS_SAVED }) { "One or more receipts are already claimed or unavailable." }
+        require(receipts.all { it.exchangeRate != null && it.sgdEquivalent != null }) { "Enter a manual SGD exchange rate for each foreign-currency receipt before creating this claim." }
+        val images = receipts.map { File(it.imagePath) }
+        require(images.all { it.isFile && it.length() in 1..(10L * 1024 * 1024) }) { "Every receipt needs a readable image no larger than 10 MiB before you can create a claim." }
+        require(images.sumOf { it.length() } <= 50L * 1024 * 1024) { "Images in one claim must total 50 MiB or less." }
+        require(images.all { image ->
+            val dimensions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(image.absolutePath, dimensions)
+            dimensions.outWidth > 0 && dimensions.outHeight > 0 && dimensions.outWidth.toLong() * dimensions.outHeight <= 40_000_000L
+        }) { "Every receipt image must be readable and no larger than 40 megapixels." }
+        return database.withTransaction {
+            receipts.forEach { receipt ->
+                val current = dao.findForUser(receipt.ownerUserId, receipt.clientReceiptId)
+                require(current == receipt && receipt.status == ReceiptEntity.STATUS_SAVED) { "A selected receipt changed. Refresh and try again." }
+            }
+            val claimId = database.claimDao().insert(ClaimEntity(title = cleanTitle, startDate = start, endDate = end, claimantName = claimantName.trim()))
+            database.claimDao().insertLinks(receipts.map { ClaimReceiptCrossRef(claimId, it.ownerUserId, it.clientReceiptId) })
+            claimId
         }
     }
 
-    suspend fun refreshFromServer(): Boolean {
-        val snapshot = sessionStore.snapshot() ?: return false
-        val userId = snapshot.userId
-        val authorization = "Bearer ${snapshot.accessToken}"
-        val serverReceipts = requireNotNull(api.receipts(authorization).data)
-        var imageDownloadFailed = false
-        serverReceipts.forEach { remote ->
-            val serverId = remote.id.toString()
-            val current = remote.clientReceiptId?.let { dao.findForUser(userId, it) }
-                ?: dao.findByServerId(userId, serverId)
-            var imagePath = current?.imagePath.orEmpty()
-            if ((imagePath.isBlank() || !File(imagePath).exists()) && !remote.storageKey.isNullOrBlank()) {
-                try {
-                    val imageResponse = api.receiptImage(remote.id, authorization)
-                    require(imageResponse.isSuccessful) { "Receipt image unavailable (${imageResponse.code()})." }
-                    val body = requireNotNull(imageResponse.body())
-                    imagePath = withContext(Dispatchers.IO) {
-                        val imageFile = File(File(context.filesDir, "receipt-images").apply { mkdirs() }, "server-$serverId.jpg")
-                        val temporaryFile = File(imageFile.parentFile, "${imageFile.name}.part")
-                        temporaryFile.delete()
-                        try {
-                            body.byteStream().use { input -> temporaryFile.outputStream().use { output -> input.copyTo(output) } }
-                            require(temporaryFile.length() > 0) { "Receipt image was empty." }
-                            require(temporaryFile.renameTo(imageFile)) { "Unable to save receipt image." }
-                        } catch (error: Throwable) {
-                            temporaryFile.delete()
-                            throw error
-                        }
-                        imageFile.absolutePath
-                    }
-                } catch (cancelled: kotlinx.coroutines.CancellationException) {
-                    throw cancelled
-                } catch (_: Throwable) {
-                    imageDownloadFailed = true
-                }
-            }
-            val entity = ReceiptEntity(
-                clientReceiptId = current?.clientReceiptId ?: remote.clientReceiptId ?: "server-$serverId",
-                ownerUserId = userId,
-                serverId = serverId,
-                amount = remote.amount,
-                currency = remote.currency,
-                receiptDate = remote.receiptDate.take(10),
-                categoryId = remote.categoryId,
-                description = remote.description,
-                note = remote.note,
-                imagePath = imagePath,
-                status = if (remote.status.equals("CLAIMED", ignoreCase = true)) ReceiptEntity.STATUS_CLAIMED else ReceiptEntity.STATUS_UPLOADED,
-                createdAt = current?.createdAt ?: System.currentTimeMillis()
-            )
-            // A user/token switch while sync was in flight must not persist this response.
-            if (sessionStore.snapshot() == snapshot) {
-                dao.upsert(entity)
-                // Older app versions could have inserted the server receipt under a synthetic
-                // server-$id key before the API exposed clientReceiptId. Once the UUID arrives,
-                // retain the UUID row (and its local image) and remove the duplicate server row.
-                dao.deleteDuplicateServerRows(userId, serverId, entity.clientReceiptId)
-            }
+    suspend fun receiptsForClaim(claimId: Long): List<ReceiptEntity> = database.claimDao().linksForClaim(claimId).mapNotNull {
+        dao.findByKey(it.receiptOwnerUserId, it.receiptClientReceiptId)
+    }
+
+    suspend fun releaseLegacyClaim(ownerId: Int, clientId: String) {
+        database.withTransaction {
+            require(!database.claimDao().isClaimed(ownerId, clientId)) { "This receipt belongs to a local claim and cannot be released." }
+            database.openHelper.writableDatabase.execSQL("UPDATE receipts SET status = 'SAVED', errorMessage = NULL WHERE ownerUserId = ? AND clientReceiptId = ? AND status = 'CLAIMED'", arrayOf(ownerId, clientId))
         }
-        return imageDownloadFailed
     }
 
-    suspend fun markClaimed(userId: Int, serverIds: List<String>) {
-        if (serverIds.isEmpty()) return
-        if (sessionStore.snapshot()?.userId != userId) return
-        dao.markClaimed(userId, serverIds)
+    suspend fun setExchangeRate(ownerId: Int, clientId: String, rateText: String) {
+        val rate = validatePositiveAmount(rateText, "Exchange rate", maxScale = 8)
+        require(rate <= BigDecimal("1000000")) { "Exchange rate must be no more than 1,000,000." }
+        database.withTransaction {
+            require(!database.claimDao().isClaimed(ownerId, clientId)) { "Receipts in a local claim cannot be edited." }
+            val receipt = dao.findForUser(ownerId, clientId) ?: error("Receipt was not found.")
+            require(receipt.status == ReceiptEntity.STATUS_SAVED && receipt.currency != "SGD") { "Only unclaimed foreign-currency receipts can be edited." }
+            val sgd = BigDecimal(receipt.amount).multiply(rate).setScale(2, RoundingMode.HALF_UP)
+            require(dao.updateExchange(ownerId, clientId, rate.stripTrailingZeros().toPlainString(), sgd.toPlainString()) == 1) { "Receipt changed before the rate was saved." }
+        }
     }
 
-    suspend fun pendingUploadIdsForCurrentUser(): List<String> {
-        val snapshot = sessionStore.snapshot() ?: return emptyList()
-        return dao.pendingUploads(snapshot.userId).map { it.clientReceiptId }
+    private fun validatePositiveAmount(value: String, label: String, maxScale: Int = 6): BigDecimal {
+        val number = value.toBigDecimalOrNull()
+        val maximum = if (label == "Exchange rate") BigDecimal("1000000") else BigDecimal("1000000000")
+        require(number != null && number > BigDecimal.ZERO && number <= maximum && number.scale().coerceAtLeast(0) <= maxScale) {
+            "$label must be greater than 0 and no more than ${maximum.toPlainString()}, with at most $maxScale decimal places."
+        }
+        return number
     }
 }

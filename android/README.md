@@ -1,24 +1,18 @@
 # Receipt Claims Android app
 
-Native Kotlin/Jetpack Compose client for the receipt claims API.
+Native Kotlin/Jetpack Compose app for saving receipts, creating claims, and generating reimbursement reports entirely on the device. It has no account requirement or network permission. Receipt photos, claims, and generated files are kept in private app storage; use **Backup and restore** to move a backup between devices.
 
-## Configuration
+New receipts use SGD by default, and receipt names are optional. For another currency, enter the exchange rate to SGD manually. Room migrations from version 3 through version 5 preserve receipt rows and image paths, keep legacy online-claimed receipts marked as previously claimed, and normalize other old upload states to locally saved. Legacy foreign-currency rows keep an unknown SGD conversion until a rate is entered manually. The app works offline without an account, hosting, Azure, or network permission. Backend and Azure deployment files remain optional reference material; the Android app does not call them. The admin portal remains a separate backend feature.
 
-Set `BACKEND_BASE_URL` in `local.properties` (or pass it as a Gradle property):
-
-```properties
-BACKEND_BASE_URL=https://your-api.example.com/api/
-```
-
-The URL must end with `/`. For a local emulator backend, use `http://10.0.2.2:3000/api/` and only enable cleartext in a debug network security configuration. Configure the production API URL before building a release; the fallback URL is intentionally non-routable.
-
-The app intentionally has no admin navigation. Admin access is a backend concern and remains disabled by the server feature flag.
+**Storage management** filters receipts by inclusive date range and classification, opens full-size photos, and supports single or filtered bulk deletion. Deleting a receipt removes its affected local claim and saved reports while keeping other receipts available for reuse. There is no arbitrary lifetime receipt quota; storage is limited by available device space. Report-generation limits apply per claim and are shown in the app.
 
 ## Build
 
-Open this directory in Android Studio, sync Gradle, and run the `app` configuration. The project targets API 36 for current Google Play requirements.
+Open this directory in Android Studio, sync Gradle, and run the `app` configuration. The project targets API 36.
 
 From the repository root, run `android\gradlew.bat -p android assembleDebug` on Windows or `./android/gradlew -p android assembleDebug` on macOS/Linux.
+
+The debug application ID uses a `.qa` suffix so it can be installed beside an existing release app during checks. Release builds retain the original application ID and require the same signing key used by previous releases.
 
 ### Signed release APK
 
@@ -29,16 +23,6 @@ Release builds require all four signing variables below. Keep the keystore under
 - `RECEIPT_RELEASE_KEY_ALIAS`
 - `RECEIPT_RELEASE_KEY_PASSWORD`
 
-From the `android/` directory, set those variables in the current environment and run:
+From the `android/` directory, set those variables in the current environment and run `./gradlew assembleRelease` (or `.\gradlew.bat assembleRelease` on Windows).
 
-```powershell
-.\gradlew.bat assembleRelease
-```
-
-The signed APK is written to `app/build/outputs/apk/release/app-release.apk`. With a device connected and USB debugging enabled, install or update it with:
-
-```powershell
-adb install -r app\build\outputs\apk\release\app-release.apk
-```
-
-On macOS/Linux, use `./gradlew assembleRelease` and `adb install -r app/build/outputs/apk/release/app-release.apk`. Keep the same keystore and alias for future updates to the installed app.
+The APK is written to `app/build/outputs/apk/release/app-release.apk`. Install or update it with `adb install -r app/build/outputs/apk/release/app-release.apk`. Keep the same keystore and alias for future updates.

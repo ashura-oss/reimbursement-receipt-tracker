@@ -1,37 +1,35 @@
 # Reimbursement Receipt Tracker
 
-Native Android receipt capture and reimbursement reporting app backed by a layered Express API.
+Offline-first native Android app for recording receipts, grouping them into claims, and preparing reimbursement reports. The app runs without an account, network access, backend hosting, or Azure. Receipt images, claims, reports, and claimant settings stay in private app storage; use the in-app **Backup and restore** screen to move data between devices.
 
-The app lets a user photograph a receipt, enter the amount, choose a currency and classification, keep the original image, group receipts into a claim, and generate the supplied Excel format together with Word and PDF files.
+New receipt amounts use SGD by default. For another currency, enter the exchange rate to SGD manually. Receipt names are optional. Reports include an Excel workbook, a Word document with receipt images, and a combined PDF. Room migrations from version 3 through version 5 preserve existing receipts and photos. Old online-claimed rows remain marked as previously claimed until the user explicitly makes them available for a local claim.
+
+The **Storage management** screen filters receipts by inclusive date range and classification, opens full-size receipt photos, and supports single or filtered bulk deletion. Deleting a receipt also removes its affected local claim and saved reports; other receipts remain available for reuse. The app has no arbitrary lifetime receipt quota; storage is limited by the device's available space. Individual report generation limits are shown in the app.
 
 ## Repository layout
 
-- `android/` — Kotlin and Jetpack Compose client with CameraX, Photo Picker, Room, WorkManager, and encrypted session storage.
-- `backend/` — Express ES modules API using Drizzle ORM with SQLite/libSQL.
+- `android/` — Kotlin and Jetpack Compose app with CameraX, gallery selection, Room storage, local backups, and on-device report generation.
+- `backend/` — optional legacy/reference Express API and deployment project. It is not required to build or use the Android app; Azure resources and deployment scripts are untouched by the local app.
 
-## Current architecture
+The backend retains its layered structure: routes mount controllers, controllers handle HTTP validation and response envelopes, models contain Drizzle queries, and services contain exchange-rate, storage, and report workflows. Admin routes remain a separate backend feature and are disabled by default with `ADMIN_PORTAL_ENABLED=false`.
 
-The backend follows the BED course structure: routes mount controllers, controllers handle HTTP validation and response envelopes, models contain Drizzle queries, and services contain exchange-rate, storage, and report workflows. Admin routes are prepared but disabled by default with `ADMIN_PORTAL_ENABLED=false`.
+## Android build
 
-Receipt amounts are entered manually. Frankfurter supplies date-scoped exchange rates, and the exact rate used is saved with each receipt.
+Open `android/` in Android Studio and run the `app` configuration. No `BACKEND_BASE_URL` or service credentials are needed.
 
-The backend uses SQLite by default for local development. The production deployment runs on Azure App Service for Linux, with Azure Database for PostgreSQL Flexible Server and a private Azure Blob container accessed through managed identity. Deployment and PostgreSQL migration instructions are in [backend/infra/README.md](backend/infra/README.md).
+For a command-line Android debug build on Windows, run `android\gradlew.bat -p android assembleDebug` from the repository root; on macOS/Linux, run `./android/gradlew -p android assembleDebug`. The Gradle wrapper downloads its pinned Gradle version as needed.
 
-## Development
-
-See [backend/README.md](backend/README.md) for the API setup and route list. Open `android/` in Android Studio and set `BACKEND_BASE_URL` in `local.properties` for the Android client.
-
-For a command-line Android debug build on Windows, run `android\gradlew.bat assembleDebug` from the repository root; on macOS/Linux, run `./android/gradlew assembleDebug`. The Gradle wrapper downloads its pinned Gradle version as needed.
+Release APK updates retain the original application ID and require the same signing key. The QA/debug build uses a `.qa` application ID suffix so it can be installed beside a release build.
 
 The Android Gradle wrapper (`gradlew`, `gradlew.bat`, and `gradle/wrapper`) is part of the source and should stay committed. Do not commit Gradle build caches, `local.properties`, `.env` files, local databases, receipt images, generated reports, signing keys, or credentials.
 
-## Azure App Service deployment
+## Optional backend development and deployment
 
-Provision the Azure resources from `backend/infra/appservice.bicep`, then package and deploy the production backend from `backend/`:
+See [backend/README.md](backend/README.md) for API setup and route details. To deploy the optional backend, provision Azure resources from `backend/infra/appservice.bicep`, then package and deploy from `backend/`:
 
 ```powershell
 cd backend
 ./infra/deploy-appservice.ps1 -ResourceGroup receipt-claims-rg -AppName receipt-claims-api
 ```
 
-The infrastructure template configures managed identity for private Blob access and sets PostgreSQL, JWT, and admin-disabled app settings. PostgreSQL ingress must be restricted to the App Service outbound IP addresses; see the deployment steps before running migrations. Keep production template workbooks in the private Blob account instead of Git. The old root `Procfile` supports an optional Heroku deployment only; it is not the primary production path.
+The infrastructure template configures managed identity for private Blob access and sets PostgreSQL, JWT, and admin-disabled app settings. PostgreSQL ingress must be restricted to the App Service outbound IP addresses; see the deployment steps before running migrations. Keep production template workbooks in the private Blob account instead of Git. The root `Procfile` supports an optional Heroku deployment for the reference backend.

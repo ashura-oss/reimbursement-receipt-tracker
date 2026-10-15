@@ -9,17 +9,17 @@ import java.io.ByteArrayOutputStream
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.receiptclaims.android.data.local.CategoryEntity
+import com.receiptclaims.android.data.local.ClaimDao
 import com.receiptclaims.android.data.local.ReceiptEntity
 import com.receiptclaims.android.data.repository.CategoryRepository
 import com.receiptclaims.android.data.repository.ReceiptRepository
-import com.receiptclaims.android.core.security.SessionStore
-import com.receiptclaims.android.worker.UploadScheduler
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -32,48 +32,30 @@ class ReceiptViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val repository: ReceiptRepository,
     private val categoryRepository: CategoryRepository,
-    private val sessionStore: SessionStore
+    private val claimDao: ClaimDao,
 ) : ViewModel() {
     data class SaveState(val saving: Boolean = false, val error: String? = null)
-    data class RefreshState(val refreshing: Boolean = false, val error: String? = null, val imageWarning: Boolean = false)
     private val _saveState = kotlinx.coroutines.flow.MutableStateFlow(SaveState())
     val saveState: StateFlow<SaveState> = _saveState
-    private val _refreshState = kotlinx.coroutines.flow.MutableStateFlow(RefreshState())
-    val refreshState: StateFlow<RefreshState> = _refreshState
     val receipts: StateFlow<List<ReceiptEntity>> = repository.observeReceipts()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val categories: StateFlow<List<CategoryEntity>> = categoryRepository.observeCategories()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val claimedReceiptKeys: StateFlow<Set<String>> = claimDao.observeClaimedReceiptKeys()
+        .map { it.toSet() }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
 
     init {
         viewModelScope.launch {
-            runCatching { categoryRepository.refresh() }.onFailure { if (it is CancellationException) throw it }
-            runCatching { repository.refreshFromServer() }.onFailure { if (it is CancellationException) throw it }
-            runCatching { val userId = sessionStore.snapshot()?.userId; if (userId != null) repository.pendingUploadIdsForCurrentUser().forEach { UploadScheduler.enqueue(context, it, userId) } }
-                .onFailure { if (it is CancellationException) throw it }
-        }
-    }
-
-    fun refreshReceipts() { viewModelScope.launch {
-        _refreshState.value = RefreshState(refreshing = true)
-        runCatching { repository.refreshFromServer() }
-            .onSuccess { imagesUnavailable -> _refreshState.value = RefreshState(imageWarning = imagesUnavailable) }
-            .onFailure { if (it is CancellationException) throw it; _refreshState.value = RefreshState(error = it.message ?: "Unable to refresh receipts. Tap refresh to retry.") }
-    } }
-
-    fun retryUpload(receipt: ReceiptEntity) {
-        viewModelScope.launch {
-            runCatching {
-                val userId = requireNotNull(sessionStore.snapshot()?.userId) { "Sign in again to upload this receipt." }
-                require(userId == receipt.ownerUserId) { "Sign in with the account that owns this receipt." }
-                UploadScheduler.enqueue(context, receipt.clientReceiptId, userId)
-            }.onFailure { _refreshState.value = RefreshState(error = it.message ?: "Unable to retry upload.") }
+            categoryRepository.ensureDefaults()
         }
     }
 
     fun saveReceipt(
+        name: String?,
         amount: String,
         currency: String,
+        exchangeRate: String?,
         receiptDate: String,
         categoryId: Int,
         description: String?,
@@ -85,14 +67,25 @@ class ReceiptViewModel @Inject constructor(
             _saveState.value = SaveState(saving = true)
             var savedImagePath: String? = null
             runCatching {
-                val snapshot = requireNotNull(sessionStore.snapshot()) { "Sign in again before saving receipts." }
                 val path = copyToPrivateStorage(sourceUri)
                 savedImagePath = path
-                require(sessionStore.snapshot() == snapshot) { "Your account changed while saving. Please sign in again and retry." }
-                val clientId = repository.createDraft(snapshot, amount, currency, receiptDate, categoryId, description, note, path)
-                UploadScheduler.enqueue(context, clientId, snapshot.userId)
+                repository.createReceipt(name, amount, currency, exchangeRate, receiptDate, categoryId, description, note, path)
             }.onSuccess { _saveState.value = SaveState(); onSaved() }
             .onFailure { error -> if (error is CancellationException) throw error; savedImagePath?.let { File(it).delete() }; _saveState.value = SaveState(error = error.message ?: "Unable to save receipt.") }
+        }
+    }
+
+    fun releaseLegacyClaim(receipt: ReceiptEntity) {
+        viewModelScope.launch {
+            runCatching { repository.releaseLegacyClaim(receipt.ownerUserId, receipt.clientReceiptId) }
+                .onFailure { if (it is CancellationException) throw it; _saveState.value = SaveState(error = it.message ?: "Unable to make this receipt available locally.") }
+        }
+    }
+
+    fun setExchangeRate(receipt: ReceiptEntity, rate: String) {
+        viewModelScope.launch {
+            runCatching { repository.setExchangeRate(receipt.ownerUserId, receipt.clientReceiptId, rate) }
+                .onFailure { if (it is CancellationException) throw it; _saveState.value = SaveState(error = it.message ?: "Unable to save the exchange rate.") }
         }
     }
 

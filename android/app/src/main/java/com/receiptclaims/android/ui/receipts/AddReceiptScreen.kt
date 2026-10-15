@@ -55,7 +55,9 @@ fun AddReceiptScreen(onBack: () -> Unit, onSaved: () -> Unit, viewModel: Receipt
     val categories by viewModel.categories.collectAsStateWithLifecycle()
     val saveState by viewModel.saveState.collectAsStateWithLifecycle()
     var amount by rememberSaveable { mutableStateOf("") }
+    var receiptName by rememberSaveable { mutableStateOf("") }
     var currency by rememberSaveable { mutableStateOf("SGD") }
+    var exchangeRate by rememberSaveable { mutableStateOf("") }
     var receiptDate by rememberSaveable { mutableStateOf(LocalDate.now().toString()) }
     var categoryId by rememberSaveable { mutableStateOf<Int?>(null) }
     var description by rememberSaveable { mutableStateOf("") }
@@ -96,14 +98,25 @@ fun AddReceiptScreen(onBack: () -> Unit, onSaved: () -> Unit, viewModel: Receipt
             OutlinedButton(onClick = { pickImage.launch(PickVisualMediaRequest(PickVisualMedia.ImageOnly)) }, modifier = Modifier.fillMaxWidth()) { Text("Choose from gallery") }
             Text(if (sourceUri == null) "No receipt image selected" else "Receipt image selected")
             sourceUri?.let { AsyncImage(model = it, contentDescription = "Selected receipt preview", modifier = Modifier.fillMaxWidth().heightIn(max = 240.dp)) }
+            OutlinedTextField(receiptName, { if (it.length <= 120) receiptName = it }, label = { Text("Receipt name (optional)") }, supportingText = { Text("Up to 120 characters") }, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(amount, { amount = it }, label = { Text("Amount") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.fillMaxWidth())
             ExposedDropdownMenuBox(expanded = expandedMenu == "currency", onExpandedChange = { expandedMenu = if (it) "currency" else null }) {
                 OutlinedTextField(currency, {}, readOnly = true, label = { Text("Currency") }, trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expandedMenu == "currency") }, modifier = Modifier.menuAnchor().fillMaxWidth())
                 DropdownMenu(expanded = expandedMenu == "currency", onDismissRequest = { expandedMenu = null }) {
-                    listOf("SGD", "INR", "USD", "EUR", "GBP", "AUD", "MYR", "THB", "JPY", "CNY").forEach { option ->
+                    listOf("SGD", "USD", "EUR", "GBP", "AUD", "NZD", "CAD", "CHF", "CNY", "HKD", "IDR", "INR", "JPY", "KRW", "MYR", "PHP", "THB", "TWD", "VND").forEach { option ->
                         DropdownMenuItem(text = { Text(option) }, onClick = { currency = option; expandedMenu = null })
                     }
                 }
+            }
+            if (currency != "SGD") {
+                OutlinedTextField(
+                    value = exchangeRate,
+                    onValueChange = { exchangeRate = it },
+                    label = { Text("1 $currency = ? SGD") },
+                    supportingText = { Text("Enter the rate yourself. The app works offline and does not fetch exchange rates.") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
             OutlinedTextField(receiptDate, { receiptDate = it }, label = { Text("Receipt date (YYYY-MM-DD)") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii), modifier = Modifier.fillMaxWidth())
             ExposedDropdownMenuBox(expanded = expandedMenu == "category", onExpandedChange = { expandedMenu = if (it) "category" else null }) {
@@ -113,8 +126,8 @@ fun AddReceiptScreen(onBack: () -> Unit, onSaved: () -> Unit, viewModel: Receipt
                     categories.forEach { category -> DropdownMenuItem(text = { Text(category.name) }, onClick = { categoryId = category.id; expandedMenu = null }) }
                 }
             }
-            OutlinedTextField(description, { description = it }, label = { Text("Description (optional)") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(note, { note = it }, label = { Text("Note (optional)") }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(description, { if (it.length <= 2_000) description = it }, label = { Text("Description (optional)") }, supportingText = { Text("Up to 2,000 characters") }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(note, { if (it.length <= 2_000) note = it }, label = { Text("Note (optional)") }, supportingText = { Text("Up to 2,000 characters") }, modifier = Modifier.fillMaxWidth())
             error?.let { Text(it) }
             saveState.error?.let { Text(it) }
             Button(
@@ -123,17 +136,21 @@ fun AddReceiptScreen(onBack: () -> Unit, onSaved: () -> Unit, viewModel: Receipt
                     val parsedAmount = amount.toBigDecimalOrNull()
                     val validDate = runCatching { LocalDate.parse(receiptDate.trim()) }.isSuccess
                     val normalizedAmount = parsedAmount?.stripTrailingZeros()?.let { value ->
-                        value.takeIf { it.scale() <= 2 && it > java.math.BigDecimal.ZERO && it <= java.math.BigDecimal("1000000000") }
-                            ?.setScale(2, java.math.RoundingMode.UNNECESSARY)?.toPlainString()
+                        value.takeIf { it.scale().coerceAtLeast(0) <= 6 && it > java.math.BigDecimal.ZERO && it <= java.math.BigDecimal("1000000000") }
+                            ?.toPlainString()
+                    }
+                    val normalizedRate = if (currency == "SGD") "1" else exchangeRate.toBigDecimalOrNull()?.let { rate ->
+                        rate.takeIf { it > java.math.BigDecimal.ZERO && it <= java.math.BigDecimal("1000000") && it.scale().coerceAtLeast(0) <= 8 }?.toPlainString()
                     }
                     when {
                         sourceUri == null -> error = "Add a receipt image first."
-                        normalizedAmount == null -> error = "Enter an amount greater than 0 and no more than 1,000,000,000, with at most 2 decimal places."
+                        normalizedAmount == null -> error = "Enter an amount greater than 0 and no more than 1,000,000,000, with at most 6 decimal places."
+                        normalizedRate == null -> error = "Enter an exchange rate greater than 0 and no more than 1,000,000, with at most 8 decimal places."
                         !validDate -> error = "Enter a valid date as YYYY-MM-DD."
                         categoryId == null -> error = "Choose a classification."
                         else -> {
                             val selectedImage = sourceUri!!
-                            viewModel.saveReceipt(normalizedAmount, currency, receiptDate.trim(), categoryId!!, description.trim().ifBlank { null }, note.trim().ifBlank { null }, selectedImage) {
+                            viewModel.saveReceipt(receiptName.trim().ifBlank { null }, normalizedAmount, currency, normalizedRate, receiptDate.trim(), categoryId!!, description.trim().ifBlank { null }, note.trim().ifBlank { null }, selectedImage) {
                                 if (selectedImage.scheme == "file" && selectedImage.path?.startsWith(File(context.filesDir, "receipt-staging").absolutePath) == true) File(selectedImage.path!!).delete()
                                 onSaved()
                             }

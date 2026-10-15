@@ -14,11 +14,12 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.runtime.Composable
@@ -36,11 +37,38 @@ import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ReceiptListScreen(onBack: () -> Unit, viewModel: ReceiptViewModel = hiltViewModel()) {
+fun ReceiptListScreen(onBack: () -> Unit, onStorage: () -> Unit = {}, viewModel: ReceiptViewModel = hiltViewModel()) {
     val receipts by viewModel.receipts.collectAsStateWithLifecycle()
     val categories by viewModel.categories.collectAsStateWithLifecycle()
-    val refreshState by viewModel.refreshState.collectAsStateWithLifecycle()
+    val claimedReceiptKeys by viewModel.claimedReceiptKeys.collectAsStateWithLifecycle()
+    val saveState by viewModel.saveState.collectAsStateWithLifecycle()
     var fullSizeImage by remember { mutableStateOf<File?>(null) }
+    var legacyToRelease by remember { mutableStateOf<com.receiptclaims.android.data.local.ReceiptEntity?>(null) }
+    var receiptForRate by remember { mutableStateOf<com.receiptclaims.android.data.local.ReceiptEntity?>(null) }
+    var rateValue by remember { mutableStateOf("") }
+    receiptForRate?.let { receipt ->
+        AlertDialog(
+            onDismissRequest = { receiptForRate = null },
+            title = { Text("Set exchange rate") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Enter the rate used for this receipt. 1 ${receipt.currency} = SGD")
+                    OutlinedTextField(rateValue, { rateValue = it }, label = { Text("SGD per ${receipt.currency}") })
+                }
+            },
+            confirmButton = { TextButton(onClick = { viewModel.setExchangeRate(receipt, rateValue); receiptForRate = null }) { Text("Save rate") } },
+            dismissButton = { TextButton(onClick = { receiptForRate = null }) { Text("Cancel") } }
+        )
+    }
+    legacyToRelease?.let { receipt ->
+        AlertDialog(
+            onDismissRequest = { legacyToRelease = null },
+            title = { Text("Make this receipt available locally?") },
+            text = { Text("This receipt was marked claimed by the previous online app, but its claim details are not stored on this device. Releasing it allows it to be added to a new local claim.") },
+            confirmButton = { TextButton(onClick = { viewModel.releaseLegacyClaim(receipt); legacyToRelease = null }) { Text("Make available") } },
+            dismissButton = { TextButton(onClick = { legacyToRelease = null }) { Text("Cancel") } }
+        )
+    }
     fullSizeImage?.let { image ->
         AlertDialog(
             onDismissRequest = { fullSizeImage = null },
@@ -59,24 +87,22 @@ fun ReceiptListScreen(onBack: () -> Unit, viewModel: ReceiptViewModel = hiltView
         TopAppBar(
             title = { Text("My receipts") },
             navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
-            actions = { IconButton(onClick = viewModel::refreshReceipts) { Icon(Icons.Default.Refresh, "Refresh receipts") } }
+            actions = { TextButton(onClick = onStorage) { Text("Find and manage") } },
         )
     }) { padding ->
         if (receipts.isEmpty()) {
             Column(Modifier.fillMaxSize().padding(padding).padding(24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(if (refreshState.refreshing) "Refreshing receipts…" else "No receipts saved yet.")
-                refreshState.error?.let { Text(it) }
-                if (refreshState.imageWarning) Text("Some receipt images could not download. Tap refresh to retry.")
+                Text("No receipts saved yet.")
+                Text("Receipts and photos are stored on this device.")
             }
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                if (refreshState.refreshing) item { Text("Refreshing receipts…") }
-                refreshState.error?.let { message -> item { Text(message) } }
-                if (refreshState.imageWarning) item { Text("Some receipt images could not download. Tap refresh to retry.") }
-                items(receipts, key = { it.clientReceiptId }) { receipt ->
+                item { Text("Stored on this device") }
+                saveState.error?.let { message -> item { Text(message) } }
+                items(receipts, key = { "${it.ownerUserId}:${it.clientReceiptId}" }) { receipt ->
                     Card(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             if (receipt.imagePath.isNotBlank() && File(receipt.imagePath).exists()) {
@@ -86,15 +112,22 @@ fun ReceiptListScreen(onBack: () -> Unit, viewModel: ReceiptViewModel = hiltView
                                     modifier = Modifier.fillMaxWidth().heightIn(max = 170.dp).clickable { fullSizeImage = File(receipt.imagePath) }.padding(bottom = 8.dp),
                                     contentScale = ContentScale.Fit
                                 )
-                            }
+                            } else Text("Receipt photo unavailable on this device")
                             Text("${receipt.currency} ${receipt.amount}")
+                            receipt.sgdEquivalent?.let { Text("SGD $it (rate ${receipt.exchangeRate ?: "unknown"})") }
+                                ?: if (receipt.currency != "SGD" && receipt.status == com.receiptclaims.android.data.local.ReceiptEntity.STATUS_SAVED) {
+                                    TextButton(onClick = { rateValue = ""; receiptForRate = receipt }) { Text("Set exchange rate manually") }
+                                } else Unit
                             Text(receipt.receiptDate)
+                            Text(receipt.name?.takeIf(String::isNotBlank) ?: "Receipt · ${receipt.receiptDate}")
                             Text(categories.firstOrNull { it.id == receipt.categoryId }?.name ?: "Category ${receipt.categoryId}")
                             receipt.description?.takeIf(String::isNotBlank)?.let { Text(it) }
-                            Text("Status: ${receipt.status.toFriendlyStatus()}")
+                            val inLocalClaim = "${receipt.ownerUserId}:${receipt.clientReceiptId}" in claimedReceiptKeys
+                            Text("Status: ${if (inLocalClaim) "In a local claim" else receipt.status.toFriendlyStatus()}")
                             receipt.errorMessage?.let { Text(it) }
-                            if (receipt.status == com.receiptclaims.android.data.local.ReceiptEntity.STATUS_FAILED || receipt.status == com.receiptclaims.android.data.local.ReceiptEntity.STATUS_PENDING_UPLOAD) {
-                                androidx.compose.material3.TextButton(onClick = { viewModel.retryUpload(receipt) }) { Text("Retry upload") }
+                            if (receipt.status == com.receiptclaims.android.data.local.ReceiptEntity.STATUS_CLAIMED) {
+                                Text("Previously claimed online. No claim history was saved on this device.")
+                                TextButton(onClick = { legacyToRelease = receipt }) { Text("Make available for a local claim…") }
                             }
                         }
                     }
@@ -105,11 +138,7 @@ fun ReceiptListScreen(onBack: () -> Unit, viewModel: ReceiptViewModel = hiltView
 }
 
 private fun String.toFriendlyStatus(): String = when (this) {
-    com.receiptclaims.android.data.local.ReceiptEntity.STATUS_DRAFT -> "Draft"
-    com.receiptclaims.android.data.local.ReceiptEntity.STATUS_PENDING_UPLOAD -> "Waiting to upload"
-    com.receiptclaims.android.data.local.ReceiptEntity.STATUS_UPLOADING -> "Uploading…"
-    com.receiptclaims.android.data.local.ReceiptEntity.STATUS_UPLOADED -> "Ready to claim"
+    com.receiptclaims.android.data.local.ReceiptEntity.STATUS_SAVED -> "Saved on this device"
     com.receiptclaims.android.data.local.ReceiptEntity.STATUS_CLAIMED -> "In a claim"
-    com.receiptclaims.android.data.local.ReceiptEntity.STATUS_FAILED -> "Upload failed"
     else -> replace('_', ' ').lowercase().replaceFirstChar(Char::uppercase)
 }

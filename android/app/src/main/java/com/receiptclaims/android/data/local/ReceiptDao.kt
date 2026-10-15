@@ -8,23 +8,24 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface ReceiptDao {
-    @Query("SELECT COUNT(*) FROM receipts")
-    suspend fun countAll(): Int
-
     @Query("SELECT * FROM receipts WHERE ownerUserId = :userId ORDER BY receiptDate DESC, createdAt DESC")
     fun observeForUser(userId: Int): Flow<List<ReceiptEntity>>
+
+    @Query("SELECT * FROM receipts ORDER BY receiptDate DESC, createdAt DESC, ownerUserId, clientReceiptId")
+    fun observeAll(): Flow<List<ReceiptEntity>>
 
     @Query("SELECT * FROM receipts WHERE ownerUserId = :userId AND clientReceiptId = :clientId LIMIT 1")
     suspend fun findForUser(userId: Int, clientId: String): ReceiptEntity?
 
-    @Query("SELECT * FROM receipts WHERE ownerUserId = :userId AND serverId = :serverId LIMIT 1")
-    suspend fun findByServerId(userId: Int, serverId: String): ReceiptEntity?
+    @Query("SELECT * FROM receipts ORDER BY ownerUserId, receiptDate, createdAt") suspend fun allReceipts(): List<ReceiptEntity>
 
-    @Query("DELETE FROM receipts WHERE ownerUserId = :userId AND serverId = :serverId AND clientReceiptId != :keepClientId")
-    suspend fun deleteDuplicateServerRows(userId: Int, serverId: String, keepClientId: String)
+    @Query("DELETE FROM receipts") suspend fun deleteAll()
+    @Query("DELETE FROM receipts WHERE ownerUserId = :ownerId AND clientReceiptId = :clientId") suspend fun deleteByKey(ownerId: Int, clientId: String): Int
 
-    @Query("SELECT * FROM receipts WHERE ownerUserId = :userId AND status IN ('PENDING_UPLOAD', 'FAILED', 'UPLOADING') ORDER BY createdAt ASC")
-    suspend fun pendingUploads(userId: Int): List<ReceiptEntity>
+    @Query("SELECT * FROM receipts WHERE ownerUserId = :ownerId AND clientReceiptId = :clientId") suspend fun findByKey(ownerId: Int, clientId: String): ReceiptEntity?
+
+    @Query("UPDATE receipts SET exchangeRate = :rate, sgdEquivalent = :sgd WHERE ownerUserId = :ownerId AND clientReceiptId = :clientId AND status = 'SAVED'")
+    suspend fun updateExchange(ownerId: Int, clientId: String, rate: String, sgd: String): Int
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(receipt: ReceiptEntity)
@@ -32,12 +33,4 @@ interface ReceiptDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAll(receipts: List<ReceiptEntity>)
 
-    @Query("UPDATE receipts SET status = :status, errorMessage = :errorMessage WHERE ownerUserId = :userId AND clientReceiptId = :id")
-    suspend fun updateStatus(userId: Int, id: String, status: String, errorMessage: String? = null)
-
-    @Query("UPDATE receipts SET serverId = :serverId, status = :status, errorMessage = NULL WHERE ownerUserId = :userId AND clientReceiptId = :id")
-    suspend fun markUploaded(userId: Int, id: String, serverId: String, status: String = ReceiptEntity.STATUS_UPLOADED)
-
-    @Query("UPDATE receipts SET status = 'CLAIMED' WHERE ownerUserId = :userId AND serverId IN (:serverIds)")
-    suspend fun markClaimed(userId: Int, serverIds: List<String>)
 }
