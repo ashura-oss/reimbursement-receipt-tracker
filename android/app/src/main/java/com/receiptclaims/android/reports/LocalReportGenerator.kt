@@ -11,6 +11,7 @@ import android.graphics.pdf.PdfDocument
 import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
+import com.receiptclaims.android.data.local.ExpenseAccounts
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -46,6 +47,7 @@ data class ReportReceipt(
     val note: String?,
     val imagePath: String,
     val name: String? = null,
+    val expenseAccountId: String? = null,
 )
 
 data class ReportClaim(
@@ -150,9 +152,10 @@ class LocalReportGenerator @Inject constructor(@ApplicationContext private val c
         claim.receipts.forEachIndexed { index, receipt ->
             val rowNum = 21 + index
             val row = findRow(sheetData, rowNum) ?: error("Workbook is missing receipt row $rowNum")
+            val account = ExpenseAccounts.find(receipt.expenseAccountId)
             setCell(doc, row, "A$rowNum", (index + 1).toString(), null)
             setCell(doc, row, "B$rowNum", excelDate(receipt.date), "numeric")
-            setCell(doc, row, "C$rowNum", null, null) // account code is not captured by the offline app
+            setCell(doc, row, "C$rowNum", account?.code, "numeric")
             setCell(doc, row, "H$rowNum", receiptLabel(receipt), null)
             setCell(doc, row, "K$rowNum", numeric(receipt.amount), "numeric")
             setCell(doc, row, "M$rowNum", receipt.currency, null)
@@ -161,14 +164,16 @@ class LocalReportGenerator @Inject constructor(@ApplicationContext private val c
             setCell(doc, row, "S$rowNum", receipt.category, null)
             setRowHeight(row, receipt, existingRowHeight = row.getAttribute("ht").toDoubleOrNull() ?: 18.0)
         }
+        writeExpenseAccountSummary(doc, sheetData, claim, lastData = 20 + claim.receipts.size.coerceAtLeast(1))
         // Formula totals only use SGD equivalents. Original currency amounts stay unsummed.
         val lastData = 20 + claim.receipts.size.coerceAtLeast(1)
         val totalRowNum = 50 + extras
         findRow(sheetData, totalRowNum)?.let { total ->
-            setFormula(doc, total, "O$totalRowNum", "SUM(O21:O$lastData)")
+            setFormula(doc, total, "O$totalRowNum", "SUM(O21:O$lastData)", sumSgd(claim.receipts).stripTrailingZeros().toPlainString())
             val currencies = claim.receipts.map { it.currency.trim().uppercase(Locale.ROOT) }
             if (currencies.isNotEmpty() && currencies.all { it == currencies.first() }) {
-                setFormula(doc, total, "K$totalRowNum", "SUM(K21:K$lastData)")
+                val originalTotal = claim.receipts.fold(BigDecimal.ZERO) { sum, receipt -> sum.add(decimal(receipt.amount)) }
+                setFormula(doc, total, "K$totalRowNum", "SUM(K21:K$lastData)", originalTotal.stripTrailingZeros().toPlainString())
             } else {
                 setCell(doc, total, "K$totalRowNum", null, null)
             }
@@ -274,14 +279,55 @@ class LocalReportGenerator @Inject constructor(@ApplicationContext private val c
         return serializeXml(workbook)
     }
 
-    private fun setFormula(doc: Document, row: Element, ref: String, formula: String) {
+    private fun setFormula(doc: Document, row: Element, ref: String, formula: String, cachedValue: String? = null) {
         val cell = getOrCreateCell(doc, row, ref)
         while (cell.firstChild != null) cell.removeChild(cell.firstChild)
         cell.removeAttribute("t")
         val f = doc.createElementNS(MAIN_NS, "f").apply { textContent = formula }
-        val v = doc.createElementNS(MAIN_NS, "v")
+        val v = doc.createElementNS(MAIN_NS, "v").apply { if (cachedValue != null) textContent = cachedValue }
         cell.appendChild(f); cell.appendChild(v)
     }
+
+    private fun writeExpenseAccountSummary(doc: Document, sheetData: Element, claim: ReportClaim, lastData: Int) {
+        val accounts = ExpenseAccounts.all
+        check(accounts.size == 14) { "Expense account catalog must match the bundled summary layout" }
+        val receiptAccountIds = claim.receipts.map { it.expenseAccountId }
+        val sgdAmounts = claim.receipts.map { it.sgdEquivalent }
+        val leftAccounts = accounts.take(7)
+        val rightAccounts = accounts.drop(7)
+        leftAccounts.forEachIndexed { index, account ->
+            val summaryRow = 9 + index
+            findRow(sheetData, summaryRow)?.let { row ->
+                setCell(doc, row, "B$summaryRow", account.code, "numeric")
+                setCell(doc, row, "C$summaryRow", account.summaryText, null)
+                val amount = AccountSummaryFormula.cachedSgdTotal(account.id, receiptAccountIds, sgdAmounts)
+                setFormula(doc, row, "F$summaryRow", "SUMIF(\$C\$21:\$C\$$lastData,B$summaryRow,\$O\$21:\$O\$$lastData)", amount.stripTrailingZeros().toPlainString())
+            }
+        }
+        val duplicateCodes = rightAccounts.groupBy { it.code }.filterValues { it.size > 1 }.keys
+        rightAccounts.forEachIndexed { index, account ->
+            val summaryRow = 9 + index
+            findRow(sheetData, summaryRow)?.let { row ->
+                setCell(doc, row, "H$summaryRow", account.code, "numeric")
+                setCell(doc, row, "I$summaryRow", account.summaryText, null)
+                if (account.code in duplicateCodes) {
+                    val formula = AccountSummaryFormula.formula(account.id, receiptAccountIds)
+                    val amount = AccountSummaryFormula.cachedSgdTotal(account.id, receiptAccountIds, sgdAmounts)
+                    setFormula(doc, row, "K$summaryRow", formula, amount.stripTrailingZeros().toPlainString())
+                } else {
+                    val amount = AccountSummaryFormula.cachedSgdTotal(account.id, receiptAccountIds, sgdAmounts)
+                    setFormula(doc, row, "K$summaryRow", "SUMIF(\$C\$21:\$C\$$lastData,H$summaryRow,\$O\$21:\$O\$$lastData)", amount.stripTrailingZeros().toPlainString())
+                }
+            }
+        }
+        findRow(sheetData, 16)?.let { row ->
+            setCell(doc, row, "F16", null, null)
+            setFormula(doc, row, "K16", "SUM(F9:F15)+SUM(K9:K15)", sumSgd(claim.receipts.filter { ExpenseAccounts.find(it.expenseAccountId) != null }).stripTrailingZeros().toPlainString())
+        }
+    }
+
+    private fun sumSgd(receipts: List<ReportReceipt>): BigDecimal =
+        receipts.fold(BigDecimal.ZERO) { total, receipt -> total.add(decimal(receipt.sgdEquivalent)) }
 
     private fun setCell(doc: Document, row: Element, ref: String, value: String?, type: String?) {
         val cell = getOrCreateCell(doc, row, ref)

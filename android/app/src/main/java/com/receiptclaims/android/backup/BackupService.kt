@@ -8,6 +8,7 @@ import com.receiptclaims.android.data.local.AppDatabase
 import com.receiptclaims.android.data.local.CategoryEntity
 import com.receiptclaims.android.data.local.ClaimEntity
 import com.receiptclaims.android.data.local.ClaimReceiptCrossRef
+import com.receiptclaims.android.data.local.ExpenseAccounts
 import com.receiptclaims.android.data.local.LocalSettingEntity
 import com.receiptclaims.android.data.local.ReceiptEntity
 import com.receiptclaims.android.data.local.ReportFileEntity
@@ -317,6 +318,7 @@ class BackupService @Inject constructor(
         val receipts = receiptArray.toObjects { item ->
             val entity = item.toReceipt()
             require(entity.ownerUserId >= 0 && entity.clientReceiptId.isNotBlank() && entity.clientReceiptId.length <= 200 && entity.currency.matches(Regex("[A-Z]{3}")) && entity.createdAt >= 0 && (entity.name?.length ?: 0) <= 120) { "Backup contains an invalid receipt." }
+            require(entity.expenseAccountId == null || ExpenseAccounts.find(entity.expenseAccountId) != null) { "Backup contains an unknown expense account." }
             val amount = validPositiveMoney(entity.amount, MAX_AMOUNT, 6, "receipt amount")
             val exchangeRate = entity.exchangeRate?.let { validPositiveMoney(it, MAX_RATE, 8, "exchange rate") }
             val sgdEquivalent = entity.sgdEquivalent?.let { validNonNegativeMoney(it, MAX_SGD_EQUIVALENT, 6, "SGD amount") }
@@ -439,13 +441,13 @@ class BackupService @Inject constructor(
     private fun ReceiptEntity.toJson(file: String?, missing: Boolean) = JSONObject().apply {
         put("clientReceiptId", clientReceiptId); put("ownerUserId", ownerUserId); put("serverId", serverId); put("amount", amount); put("currency", currency)
         put("exchangeRate", exchangeRate); put("sgdEquivalent", sgdEquivalent); put("receiptDate", receiptDate); put("categoryId", categoryId)
-        put("name", name); put("description", description); put("note", note); put("imagePath", ""); put("status", status); put("errorMessage", errorMessage); put("createdAt", createdAt)
+        put("name", name); put("expenseAccountId", expenseAccountId); put("description", description); put("note", note); put("imagePath", ""); put("status", status); put("errorMessage", errorMessage); put("createdAt", createdAt)
         put("file", file); put("fileMissing", missing)
     }
     private fun JSONObject.toReceipt() = ReceiptEntity(
         clientReceiptId = getString("clientReceiptId"), ownerUserId = getInt("ownerUserId"), serverId = optNullableString("serverId"), amount = getString("amount"), currency = getString("currency"),
         exchangeRate = optNullableString("exchangeRate"), sgdEquivalent = optNullableString("sgdEquivalent"), receiptDate = getString("receiptDate"), categoryId = getInt("categoryId"),
-        name = optNullableString("name"), description = optNullableString("description"), note = optNullableString("note"), imagePath = "", status = optString("status", ReceiptEntity.STATUS_SAVED), errorMessage = optNullableString("errorMessage"), createdAt = getLong("createdAt")
+        name = optNullableString("name"), expenseAccountId = optNullableString("expenseAccountId"), description = optNullableString("description"), note = optNullableString("note"), imagePath = "", status = optString("status", ReceiptEntity.STATUS_SAVED), errorMessage = optNullableString("errorMessage"), createdAt = getLong("createdAt")
     )
     private fun CategoryEntity.toJson() = JSONObject().put("id", id).put("name", name).put("accountCode", accountCode)
     private fun ClaimEntity.toJson() = JSONObject().put("id", id).put("title", title).put("startDate", startDate).put("endDate", endDate).put("claimantName", claimantName).put("createdAt", createdAt)

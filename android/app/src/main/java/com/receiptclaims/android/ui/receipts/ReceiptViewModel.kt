@@ -61,6 +61,7 @@ class ReceiptViewModel @Inject constructor(
         description: String?,
         note: String?,
         sourceUri: Uri,
+        expenseAccountId: String? = null,
         onSaved: () -> Unit
     ) {
         viewModelScope.launch {
@@ -69,7 +70,7 @@ class ReceiptViewModel @Inject constructor(
             runCatching {
                 val path = copyToPrivateStorage(sourceUri)
                 savedImagePath = path
-                repository.createReceipt(name, amount, currency, exchangeRate, receiptDate, categoryId, description, note, path)
+                repository.createReceipt(name, amount, currency, exchangeRate, receiptDate, categoryId, description, note, path, expenseAccountId)
             }.onSuccess { _saveState.value = SaveState(); onSaved() }
             .onFailure { error -> if (error is CancellationException) throw error; savedImagePath?.let { File(it).delete() }; _saveState.value = SaveState(error = error.message ?: "Unable to save receipt.") }
         }
@@ -86,6 +87,13 @@ class ReceiptViewModel @Inject constructor(
         viewModelScope.launch {
             runCatching { repository.setExchangeRate(receipt.ownerUserId, receipt.clientReceiptId, rate) }
                 .onFailure { if (it is CancellationException) throw it; _saveState.value = SaveState(error = it.message ?: "Unable to save the exchange rate.") }
+        }
+    }
+
+    fun setExpenseAccount(receipt: ReceiptEntity, expenseAccountId: String?) {
+        viewModelScope.launch {
+            runCatching { repository.setExpenseAccount(receipt.ownerUserId, receipt.clientReceiptId, expenseAccountId) }
+                .onFailure { if (it is CancellationException) throw it; _saveState.value = SaveState(error = it.message ?: "Unable to save the expense account.") }
         }
     }
 

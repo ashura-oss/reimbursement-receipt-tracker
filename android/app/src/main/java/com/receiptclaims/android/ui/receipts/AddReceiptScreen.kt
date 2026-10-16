@@ -43,6 +43,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.receiptclaims.android.data.local.ExpenseAccounts
 import java.time.LocalDate
 import java.time.format.DateTimeParseException
 import coil.compose.AsyncImage
@@ -60,6 +61,7 @@ fun AddReceiptScreen(onBack: () -> Unit, onSaved: () -> Unit, viewModel: Receipt
     var exchangeRate by rememberSaveable { mutableStateOf("") }
     var receiptDate by rememberSaveable { mutableStateOf(LocalDate.now().toString()) }
     var categoryId by rememberSaveable { mutableStateOf<Int?>(null) }
+    var expenseAccountId by rememberSaveable { mutableStateOf<String?>(null) }
     var description by rememberSaveable { mutableStateOf("") }
     var note by rememberSaveable { mutableStateOf("") }
     var sourceUri by rememberSaveable { mutableStateOf<Uri?>(null) }
@@ -126,6 +128,14 @@ fun AddReceiptScreen(onBack: () -> Unit, onSaved: () -> Unit, viewModel: Receipt
                     categories.forEach { category -> DropdownMenuItem(text = { Text(category.name) }, onClick = { categoryId = category.id; expandedMenu = null }) }
                 }
             }
+            ExposedDropdownMenuBox(expanded = expandedMenu == "expenseAccount", onExpandedChange = { expandedMenu = if (it) "expenseAccount" else null }) {
+                val selectedAccount = ExpenseAccounts.find(expenseAccountId)
+                OutlinedTextField(selectedAccount?.displayName ?: "Not selected", {}, readOnly = true, label = { Text("Expense account (optional)") }, trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expandedMenu == "expenseAccount") }, modifier = Modifier.menuAnchor().fillMaxWidth())
+                DropdownMenu(expanded = expandedMenu == "expenseAccount", onDismissRequest = { expandedMenu = null }) {
+                    DropdownMenuItem(text = { Text("Not selected") }, onClick = { expenseAccountId = null; expandedMenu = null })
+                    ExpenseAccounts.all.forEach { account -> DropdownMenuItem(text = { Text(account.displayName) }, onClick = { expenseAccountId = account.id; expandedMenu = null }) }
+                }
+            }
             OutlinedTextField(description, { if (it.length <= 2_000) description = it }, label = { Text("Description (optional)") }, supportingText = { Text("Up to 2,000 characters") }, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(note, { if (it.length <= 2_000) note = it }, label = { Text("Note (optional)") }, supportingText = { Text("Up to 2,000 characters") }, modifier = Modifier.fillMaxWidth())
             error?.let { Text(it) }
@@ -150,7 +160,7 @@ fun AddReceiptScreen(onBack: () -> Unit, onSaved: () -> Unit, viewModel: Receipt
                         categoryId == null -> error = "Choose a classification."
                         else -> {
                             val selectedImage = sourceUri!!
-                            viewModel.saveReceipt(receiptName.trim().ifBlank { null }, normalizedAmount, currency, normalizedRate, receiptDate.trim(), categoryId!!, description.trim().ifBlank { null }, note.trim().ifBlank { null }, selectedImage) {
+                            viewModel.saveReceipt(receiptName.trim().ifBlank { null }, normalizedAmount, currency, normalizedRate, receiptDate.trim(), categoryId!!, description.trim().ifBlank { null }, note.trim().ifBlank { null }, selectedImage, expenseAccountId) {
                                 if (selectedImage.scheme == "file" && selectedImage.path?.startsWith(File(context.filesDir, "receipt-staging").absolutePath) == true) File(selectedImage.path!!).delete()
                                 onSaved()
                             }

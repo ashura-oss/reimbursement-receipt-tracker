@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import android.content.Context
+import com.receiptclaims.android.data.local.ExpenseAccounts
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -27,12 +28,14 @@ class LocalReportGeneratorTest {
         val landscape = testImage("landscape", 1600, 900)
         val receipts = (1..30).map { i ->
             val isUsd = i % 2 == 0
-            ReportReceipt("r$i", "12.50", if (isUsd) "USD" else "SGD", if (isUsd) "1.2" else "1", if (isUsd) "15.00" else "12.50", "2026-10-12", "Admin", if (i == 30) "Long description ".repeat(18) else "Receipt $i", if (i == 1) "🧾 airport transfer" else null, (if (isUsd) landscape else portrait).absolutePath, name = "Shop $i")
+            ReportReceipt("r$i", "12.50", if (isUsd) "USD" else "SGD", if (isUsd) "1.2" else "1", if (isUsd) "15.00" else "12.50", "2026-10-12", "Admin", if (i == 30) "Long description ".repeat(18) else "Receipt $i", if (i == 1) "🧾 airport transfer" else null, (if (isUsd) landscape else portrait).absolutePath, name = "Shop $i", expenseAccountId = ExpenseAccounts.all[(i - 1) % ExpenseAccounts.all.size].id)
         }
         val generated = LocalReportGenerator(context).generate(ReportClaim(-40001, "Mixed claim", "2026-10-01", "2026-10-15", "", receipts))
         assertEquals(listOf("XLSX", "DOCX", "PDF"), generated.map { it.type })
         assertTrue(generated.all { it.file.isFile && it.file.length() > 0 })
         val xlsx = generated.first { it.type == "XLSX" }.file
+        val qaWorkbook = File(context.getExternalFilesDir(null) ?: context.filesDir, "account-code-qa.xlsx")
+        xlsx.copyTo(qaWorkbook, overwrite = true)
         ZipFile(xlsx).use { zip ->
             val packageXml = zip.entries().asSequence().filter { it.name.endsWith(".xml") || it.name.endsWith(".rels") }
                 .map { zip.getInputStream(it).use { input -> input.readBytes().toString(Charsets.UTF_8) } }.toList()
@@ -48,6 +51,17 @@ class LocalReportGeneratorTest {
             assertEquals("Expanded active cell should move with its selected cell range", activeSelection?.getAttribute("sqref"), activeSelection?.getAttribute("activeCell"))
             assertFormula(sheet, "K9", "SUMIF(\$C\$21:\$C\$50,H9,\$O\$21:\$O\$50)")
             assertFormula(sheet, "O51", "SUM(O21:O50)")
+            assertFormula(sheet, "F12", "SUMIF(\$C\$21:\$C\$50,B12,\$O\$21:\$O\$50)")
+            assertFormula(sheet, "K10", "SUM(O29,O43)")
+            assertFormula(sheet, "K11", "SUM(O30,O44)")
+            assertFormula(sheet, "K16", "SUM(F9:F15)+SUM(K9:K15)")
+            assertFalse("Blank account code must not be counted in the expense summaries", hasFormula(sheet, "F16"))
+            assertEquals("SGD grand-total cache should include every receipt", "412.5", cellValue(sheet, "O51"))
+            assertEquals("Account summary total cache should include every selected account", "412.5", cellValue(sheet, "K16"))
+            assertEquals(listOf("37.5", "45", "25", "30", "25", "30", "25"), (9..15).map { cellValue(sheet, "F$it") })
+            assertEquals(listOf("30", "25", "30", "25", "30", "25", "30"), (9..15).map { cellValue(sheet, "K$it") })
+            assertEquals("Motor Vehicle summary must include only motor selections", "25", cellValue(sheet, "K10"))
+            assertEquals("Forklift summary must include only forklift selections", "30", cellValue(sheet, "K11"))
             assertFalse("Mixed currencies must not be added in the source-currency column", hasFormula(sheet, "K51"))
             assertEquals("12.5", cellValue(sheet, "K21"))
             assertEquals("12.5", cellValue(sheet, "O21"))
@@ -63,6 +77,21 @@ class LocalReportGeneratorTest {
             assertEquals("Shop 1 — Receipt 1 — 🧾 airport transfer", cellText(sheet, "H21"))
             assertEquals("SGD", cellText(sheet, "M21"))
             assertEquals("USD", cellText(sheet, "M50"))
+            ExpenseAccounts.all.forEachIndexed { index, account ->
+                val row = 21 + index
+                assertEquals("Selected account code should populate receipt row $row", account.code, cellValue(sheet, "C$row"))
+            }
+            ExpenseAccounts.all.take(7).forEachIndexed { index, account ->
+                assertEquals(account.code, cellValue(sheet, "B${9 + index}"))
+            }
+            ExpenseAccounts.all.drop(7).forEachIndexed { index, account ->
+                assertEquals(account.code, cellValue(sheet, "H${9 + index}"))
+            }
+            assertEquals("Motor Vehicle Expenses", cellText(sheet, "I10"))
+            assertEquals("Maintenance-Forklift", cellText(sheet, "I11"))
+            assertEquals("Subscriptions", cellText(sheet, "I13"))
+            assertEquals("752000", cellValue(sheet, "C29"))
+            assertEquals("752000", cellValue(sheet, "C30"))
             val sgdTotal = (21..50).fold(BigDecimal.ZERO) { total, row -> total.add(BigDecimal(cellValue(sheet, "O$row")!!)) }
             assertEquals("412.5", sgdTotal.stripTrailingZeros().toPlainString())
             assertTrue("Date serial should be a positive Excel date", (cellValue(sheet, "B21")?.toDoubleOrNull() ?: 0.0) > 45_000)

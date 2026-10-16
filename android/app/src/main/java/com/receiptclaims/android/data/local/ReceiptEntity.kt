@@ -19,7 +19,8 @@ data class ReceiptEntity(
     val imagePath: String = "",
     val status: String = STATUS_SAVED,
     val errorMessage: String? = null,
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    val expenseAccountId: String? = null
 ) {
     companion object {
         const val STATUS_SAVED = "SAVED"

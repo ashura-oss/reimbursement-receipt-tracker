@@ -27,6 +27,9 @@ interface ReceiptDao {
     @Query("UPDATE receipts SET exchangeRate = :rate, sgdEquivalent = :sgd WHERE ownerUserId = :ownerId AND clientReceiptId = :clientId AND status = 'SAVED'")
     suspend fun updateExchange(ownerId: Int, clientId: String, rate: String, sgd: String): Int
 
+    @Query("UPDATE receipts SET expenseAccountId = :expenseAccountId WHERE ownerUserId = :ownerId AND clientReceiptId = :clientId AND status = 'SAVED'")
+    suspend fun updateExpenseAccount(ownerId: Int, clientId: String, expenseAccountId: String?): Int
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(receipt: ReceiptEntity)
 

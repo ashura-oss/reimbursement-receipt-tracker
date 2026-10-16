@@ -6,6 +6,7 @@ import com.receiptclaims.android.data.local.ClaimEntity
 import com.receiptclaims.android.data.local.ClaimReceiptCrossRef
 import com.receiptclaims.android.data.local.ReceiptDao
 import com.receiptclaims.android.data.local.ReceiptEntity
+import com.receiptclaims.android.data.local.ExpenseAccounts
 import kotlinx.coroutines.flow.Flow
 import java.math.BigDecimal
 import java.math.RoundingMode
@@ -34,7 +35,8 @@ class ReceiptRepository @Inject constructor(
         categoryId: Int,
         description: String?,
         note: String?,
-        imagePath: String
+        imagePath: String,
+        expenseAccountId: String? = null
     ): String {
         val parsedAmount = validatePositiveAmount(amount, "Amount")
         require(currency.matches(Regex("[A-Z]{3}"))) { "Choose a valid three-letter currency." }
@@ -44,6 +46,7 @@ class ReceiptRepository @Inject constructor(
         require(imagePath.isNotBlank()) { "Add a receipt image first." }
         require((description?.length ?: 0) <= 2_000 && (note?.length ?: 0) <= 2_000) { "Description and note can each be at most 2,000 characters." }
         require((name?.length ?: 0) <= 120) { "Receipt name can be at most 120 characters." }
+        require(expenseAccountId == null || ExpenseAccounts.find(expenseAccountId) != null) { "Choose a valid expense account." }
         val clientId = UUID.randomUUID().toString()
         dao.upsert(ReceiptEntity(
             clientReceiptId = clientId,
@@ -58,7 +61,8 @@ class ReceiptRepository @Inject constructor(
             description = description,
             note = note,
             imagePath = imagePath,
-            status = ReceiptEntity.STATUS_SAVED
+            status = ReceiptEntity.STATUS_SAVED,
+            expenseAccountId = expenseAccountId
         ))
         return clientId
     }
@@ -116,6 +120,16 @@ class ReceiptRepository @Inject constructor(
             require(receipt.status == ReceiptEntity.STATUS_SAVED && receipt.currency != "SGD") { "Only unclaimed foreign-currency receipts can be edited." }
             val sgd = BigDecimal(receipt.amount).multiply(rate).setScale(2, RoundingMode.HALF_UP)
             require(dao.updateExchange(ownerId, clientId, rate.stripTrailingZeros().toPlainString(), sgd.toPlainString()) == 1) { "Receipt changed before the rate was saved." }
+        }
+    }
+
+    suspend fun setExpenseAccount(ownerId: Int, clientId: String, expenseAccountId: String?) {
+        require(expenseAccountId == null || ExpenseAccounts.find(expenseAccountId) != null) { "Choose a valid expense account." }
+        database.withTransaction {
+            require(!database.claimDao().isClaimed(ownerId, clientId)) { "Receipts in a local claim cannot be edited." }
+            val receipt = dao.findForUser(ownerId, clientId) ?: error("Receipt was not found.")
+            require(receipt.status == ReceiptEntity.STATUS_SAVED) { "Only unclaimed receipts can be edited." }
+            require(dao.updateExpenseAccount(ownerId, clientId, expenseAccountId) == 1) { "Receipt changed before the expense account was saved." }
         }
     }
 

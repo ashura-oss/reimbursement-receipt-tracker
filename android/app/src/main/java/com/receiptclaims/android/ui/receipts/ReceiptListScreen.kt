@@ -12,6 +12,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.OutlinedTextField
@@ -32,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.receiptclaims.android.data.local.ExpenseAccounts
 import coil.compose.AsyncImage
 import java.io.File
 
@@ -103,6 +108,7 @@ fun ReceiptListScreen(onBack: () -> Unit, onStorage: () -> Unit = {}, viewModel:
                 item { Text("Stored on this device") }
                 saveState.error?.let { message -> item { Text(message) } }
                 items(receipts, key = { "${it.ownerUserId}:${it.clientReceiptId}" }) { receipt ->
+                    var expenseAccountExpanded by remember(receipt.ownerUserId, receipt.clientReceiptId) { mutableStateOf(false) }
                     Card(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             if (receipt.imagePath.isNotBlank() && File(receipt.imagePath).exists()) {
@@ -120,9 +126,24 @@ fun ReceiptListScreen(onBack: () -> Unit, onStorage: () -> Unit = {}, viewModel:
                                 } else Unit
                             Text(receipt.receiptDate)
                             Text(receipt.name?.takeIf(String::isNotBlank) ?: "Receipt · ${receipt.receiptDate}")
-                            Text(categories.firstOrNull { it.id == receipt.categoryId }?.name ?: "Category ${receipt.categoryId}")
-                            receipt.description?.takeIf(String::isNotBlank)?.let { Text(it) }
+                            Text("Classification: ${categories.firstOrNull { it.id == receipt.categoryId }?.name ?: "Category ${receipt.categoryId}"}")
+                            val expenseAccount = ExpenseAccounts.find(receipt.expenseAccountId)
                             val inLocalClaim = "${receipt.ownerUserId}:${receipt.clientReceiptId}" in claimedReceiptKeys
+                            val canEditAccount = receipt.status == com.receiptclaims.android.data.local.ReceiptEntity.STATUS_SAVED && !inLocalClaim
+                            if (canEditAccount) {
+                                ExposedDropdownMenuBox(expanded = expenseAccountExpanded, onExpandedChange = { expenseAccountExpanded = it }) {
+                                    OutlinedTextField(expenseAccount?.displayName ?: "Not selected", {}, readOnly = true, label = { Text("Expense account (optional)") }, trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expenseAccountExpanded) }, modifier = Modifier.menuAnchor().fillMaxWidth())
+                                    DropdownMenu(expanded = expenseAccountExpanded, onDismissRequest = { expenseAccountExpanded = false }) {
+                                        DropdownMenuItem(text = { Text("Not selected") }, onClick = { viewModel.setExpenseAccount(receipt, null); expenseAccountExpanded = false })
+                                        ExpenseAccounts.all.forEach { option ->
+                                            DropdownMenuItem(text = { Text(option.displayName) }, onClick = { viewModel.setExpenseAccount(receipt, option.id); expenseAccountExpanded = false })
+                                        }
+                                    }
+                                }
+                            } else {
+                                Text("Expense account: ${expenseAccount?.displayName ?: "Not selected"}")
+                            }
+                            receipt.description?.takeIf(String::isNotBlank)?.let { Text(it) }
                             Text("Status: ${if (inLocalClaim) "In a local claim" else receipt.status.toFriendlyStatus()}")
                             receipt.errorMessage?.let { Text(it) }
                             if (receipt.status == com.receiptclaims.android.data.local.ReceiptEntity.STATUS_CLAIMED) {

@@ -35,7 +35,7 @@ class OfflineMigrationAndClaimTest {
         old.close()
 
         database = Room.databaseBuilder(context, AppDatabase::class.java, name)
-            .addMigrations(DatabaseModule.MIGRATION_2_3, DatabaseModule.MIGRATION_3_4, DatabaseModule.MIGRATION_4_5)
+            .addMigrations(DatabaseModule.MIGRATION_2_3, DatabaseModule.MIGRATION_3_4, DatabaseModule.MIGRATION_4_5, DatabaseModule.MIGRATION_5_6)
             .build()
         val rows = runBlocking { database!!.receiptDao().allReceipts() }
         assertEquals(2, rows.size)
@@ -44,6 +44,7 @@ class OfflineMigrationAndClaimTest {
         assertEquals("SAVED", saved.status)
         assertEquals("/private/one.jpg", saved.imagePath)
         assertNull(saved.name)
+        assertNull(saved.expenseAccountId)
         assertEquals("1", saved.exchangeRate)
         assertEquals("12.50", saved.sgdEquivalent)
         val legacyClaimed = rows.single { it.ownerUserId == 20 }
@@ -72,6 +73,24 @@ class OfflineMigrationAndClaimTest {
         assertTrue("receipt may not be included in a second claim", secondAttempt.isFailure)
         assertEquals(1, db.claimDao().all().size)
         assertEquals(2, db.claimDao().allLinks().size)
+    }
+
+    @Test fun expenseAccountCanBeChangedOnUnclaimedReceiptAndIsImmutableAfterClaim() = runBlocking {
+        database = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).build()
+        val db = database!!
+        val receipt = receipt(owner = 10, amount = "8")
+        db.receiptDao().upsert(receipt)
+        val repository = ReceiptRepository(db.receiptDao(), db)
+
+        repository.setExpenseAccount(10, receipt.clientReceiptId, "forklift_maintenance")
+        assertEquals("forklift_maintenance", db.receiptDao().findForUser(10, receipt.clientReceiptId)?.expenseAccountId)
+        repository.setExpenseAccount(10, receipt.clientReceiptId, null)
+        assertNull(db.receiptDao().findForUser(10, receipt.clientReceiptId)?.expenseAccountId)
+        assertTrue(runCatching { repository.setExpenseAccount(10, receipt.clientReceiptId, "unknown") }.isFailure)
+
+        repository.createClaim("Travel", null, null, listOf(receipt), "A. Person")
+        assertTrue(runCatching { repository.setExpenseAccount(10, receipt.clientReceiptId, "motor_vehicle") }.isFailure)
+        assertNull(db.receiptDao().findForUser(10, receipt.clientReceiptId)?.expenseAccountId)
     }
 
     private fun receipt(owner: Int, amount: String): ReceiptEntity {

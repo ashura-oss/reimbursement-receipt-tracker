@@ -62,6 +62,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import com.receiptclaims.android.data.local.ExpenseAccounts
 import com.receiptclaims.android.data.local.ReceiptEntity
 import java.io.File
 import java.time.LocalDate
@@ -120,6 +121,7 @@ fun StorageScreen(onBack: () -> Unit, viewModel: StorageViewModel = hiltViewMode
                     Text("${receipt.currency} ${receipt.amount} · ${receipt.receiptDate}")
                     receipt.sgdEquivalent?.let { Text("SGD $it · rate ${receipt.exchangeRate ?: "unknown"}") }
                     Text(state.categories.firstOrNull { it.id == receipt.categoryId }?.name ?: "Classification ${receipt.categoryId}")
+                    Text("Expense account: ${ExpenseAccounts.find(receipt.expenseAccountId)?.displayName ?: "Not selected"}")
                     receipt.description?.takeIf(String::isNotBlank)?.let { Text(it) }
                     receipt.note?.takeIf(String::isNotBlank)?.let { Text("Note: $it") }
                     val image = receipt.imagePath.takeIf(String::isNotBlank)?.let(::File)

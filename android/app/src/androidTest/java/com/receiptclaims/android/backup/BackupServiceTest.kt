@@ -9,12 +9,14 @@ import com.receiptclaims.android.data.local.AppDatabase
 import com.receiptclaims.android.data.local.CategoryEntity
 import com.receiptclaims.android.data.local.ClaimEntity
 import com.receiptclaims.android.data.local.ClaimReceiptCrossRef
+import com.receiptclaims.android.data.local.ExpenseAccounts
 import com.receiptclaims.android.data.local.LocalSettingEntity
 import com.receiptclaims.android.data.local.ReceiptEntity
 import com.receiptclaims.android.data.local.ReportFileEntity
 import com.receiptclaims.android.storage.ReceiptKey
 import com.receiptclaims.android.storage.StorageRepository
 import kotlinx.coroutines.runBlocking
+import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -26,6 +28,7 @@ import org.junit.runner.RunWith
 import java.io.File
 import java.util.UUID
 import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 
 @RunWith(AndroidJUnit4::class)
@@ -47,7 +50,7 @@ class BackupServiceTest {
         val photo = File(context.filesDir, "backup-test-${UUID.randomUUID()}.jpg").apply { writeBytes(photoBytes) }
         val report = File(context.filesDir, "backup-test-${UUID.randomUUID()}.pdf").apply { writeBytes(reportBytes) }
         sourceDb.categoryDao().upsertAll(listOf(CategoryEntity(7, "Travel", "TRV")))
-        sourceDb.receiptDao().upsert(ReceiptEntity("receipt-a", 0, amount = "42.50", currency = "SGD", receiptDate = "2026-10-12", categoryId = 7, name = "Taxi", imagePath = photo.absolutePath))
+        sourceDb.receiptDao().upsert(ReceiptEntity("receipt-a", 0, amount = "42.50", currency = "SGD", receiptDate = "2026-10-12", categoryId = 7, name = "Taxi", expenseAccountId = "meals_allowances", imagePath = photo.absolutePath))
         sourceDb.receiptDao().upsert(ReceiptEntity("receipt-small-fx", 0, amount = "1.00", currency = "USD", exchangeRate = "0.00000001", sgdEquivalent = "0.00", receiptDate = "2026-10-13", categoryId = 7))
         sourceDb.claimDao().upsert(ClaimEntity(id = 12, title = "October trip", startDate = "2026-10-01", endDate = "2026-10-31", claimantName = "Alex", createdAt = 100))
         sourceDb.claimDao().insertLinks(listOf(ClaimReceiptCrossRef(12, 0, "receipt-a")))
@@ -75,8 +78,31 @@ class BackupServiceTest {
         assertEquals("0.00000001", restoredReceipts.single { it.clientReceiptId == "receipt-small-fx" }.exchangeRate)
         assertEquals("0.00", restoredReceipts.single { it.clientReceiptId == "receipt-small-fx" }.sgdEquivalent)
         assertEquals("Taxi", restoredReceipts.single { it.clientReceiptId == "receipt-a" }.name)
+        assertEquals("meals_allowances", restoredReceipts.single { it.clientReceiptId == "receipt-a" }.expenseAccountId)
         assertTrue(File(targetDb.reportFileDao().all().single().path).readBytes().contentEquals(reportBytes))
         photo.delete(); report.delete(); archive.delete(); secondArchive.delete()
+    }
+
+    @Test fun optionalExpenseAccountRestoresAndUnknownIdsAreRejected() = runBlocking<Unit> {
+        assertTrue(ExpenseAccounts.find("meals_allowances") != null)
+        sourceDb.categoryDao().upsertAll(listOf(CategoryEntity(2, "Meals")))
+        sourceDb.receiptDao().upsert(ReceiptEntity("accounted", 0, amount = "8.00", receiptDate = "2026-10-14", categoryId = 2, expenseAccountId = "meals_allowances"))
+        val validArchive = File(context.cacheDir, "account-${UUID.randomUUID()}.zip")
+        val legacyArchive = File(context.cacheDir, "account-legacy-${UUID.randomUUID()}.zip")
+        val unknownArchive = File(context.cacheDir, "account-unknown-${UUID.randomUUID()}.zip")
+        BackupService(sourceDb, context).exportTo(Uri.fromFile(validArchive))
+        rewriteReceiptAccountId(validArchive, legacyArchive, null)
+        rewriteReceiptAccountId(validArchive, unknownArchive, "not-a-catalog-id")
+
+        val unknownFailure = runCatching { BackupService(targetDb, context).importFrom(Uri.fromFile(unknownArchive)) }.exceptionOrNull()
+        assertTrue("Unknown expense account IDs must be rejected", unknownFailure != null)
+        assertTrue(targetDb.receiptDao().allReceipts().isEmpty())
+
+        BackupService(targetDb, context).importFrom(Uri.fromFile(legacyArchive))
+        assertEquals(null, targetDb.receiptDao().allReceipts().single().expenseAccountId)
+        BackupService(targetDb, context).importFrom(Uri.fromFile(validArchive))
+        assertEquals(setOf(null, "meals_allowances"), targetDb.receiptDao().allReceipts().map { it.expenseAccountId }.toSet())
+        validArchive.delete(); legacyArchive.delete(); unknownArchive.delete()
     }
 
     @Test fun conflictingReceiptIsRemappedAndUnsafeArchiveDoesNotChangeDatabase() = runBlocking<Unit> {
@@ -174,5 +200,25 @@ class BackupServiceTest {
         assertTrue(File(targetDb.receiptDao().allReceipts().single().imagePath).readText() == "photo")
         assertTrue(File(targetDb.reportFileDao().all().single().path).readText() == "report")
         archive.delete(); sourcePhoto.delete(); sourceReport.delete()
+    }
+
+    private fun rewriteReceiptAccountId(source: File, destination: File, value: String?) {
+        ZipInputStream(source.inputStream()).use { input ->
+            ZipOutputStream(destination.outputStream()).use { output ->
+                while (true) {
+                    val entry = input.nextEntry ?: break
+                    val bytes = input.readBytes()
+                    output.putNextEntry(ZipEntry(entry.name))
+                    if (entry.name == "manifest.json") {
+                        val manifest = JSONObject(bytes.toString(Charsets.UTF_8))
+                        val receipt = manifest.getJSONArray("receipts").getJSONObject(0)
+                        if (value == null) receipt.remove("expenseAccountId") else receipt.put("expenseAccountId", value)
+                        output.write(manifest.toString().toByteArray(Charsets.UTF_8))
+                    } else output.write(bytes)
+                    output.closeEntry()
+                    input.closeEntry()
+                }
+            }
+        }
     }
 }

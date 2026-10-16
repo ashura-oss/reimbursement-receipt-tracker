@@ -114,7 +114,8 @@ class ClaimsViewModel @Inject constructor(
                             description = receipt.description,
                             note = receipt.note,
                             imagePath = receipt.imagePath,
-                            name = receipt.name
+                            name = receipt.name,
+                            expenseAccountId = receipt.expenseAccountId
                         )
                     }
                 )
