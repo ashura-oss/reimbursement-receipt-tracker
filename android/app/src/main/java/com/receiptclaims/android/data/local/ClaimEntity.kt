@@ -2,6 +2,7 @@ package com.receiptclaims.android.data.local
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey
+import androidx.room.ColumnInfo
 
 @Entity(tableName = "claims")
 data class ClaimEntity(
@@ -10,5 +11,6 @@ data class ClaimEntity(
     val startDate: String? = null,
     val endDate: String? = null,
     val claimantName: String = "",
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    @ColumnInfo(defaultValue = "'{}'") val detailsJson: String = "{}"
 )

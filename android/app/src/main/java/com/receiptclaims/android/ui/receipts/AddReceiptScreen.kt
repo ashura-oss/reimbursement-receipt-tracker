@@ -36,14 +36,17 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.receiptclaims.android.data.local.ExpenseAccounts
+import com.receiptclaims.android.data.local.ReceiptDetails
 import java.time.LocalDate
 import java.time.format.DateTimeParseException
 import coil.compose.AsyncImage
@@ -54,6 +57,8 @@ import java.io.File
 fun AddReceiptScreen(onBack: () -> Unit, onSaved: () -> Unit, viewModel: ReceiptViewModel = hiltViewModel()) {
     val context = LocalContext.current
     val categories by viewModel.categories.collectAsStateWithLifecycle()
+    val staffProfile by viewModel.staffProfile.collectAsStateWithLifecycle()
+    val staffProfileLoaded by viewModel.staffProfileLoaded.collectAsStateWithLifecycle()
     val saveState by viewModel.saveState.collectAsStateWithLifecycle()
     var amount by rememberSaveable { mutableStateOf("") }
     var receiptName by rememberSaveable { mutableStateOf("") }
@@ -64,10 +69,19 @@ fun AddReceiptScreen(onBack: () -> Unit, onSaved: () -> Unit, viewModel: Receipt
     var expenseAccountId by rememberSaveable { mutableStateOf<String?>(null) }
     var description by rememberSaveable { mutableStateOf("") }
     var note by rememberSaveable { mutableStateOf("") }
+    var showAdditional by rememberSaveable { mutableStateOf(false) }
+    var detailsInitialized by rememberSaveable { mutableStateOf(false) }
+    var receiptDetails by rememberSaveable(stateSaver = receiptDetailsSaver) { mutableStateOf(ReceiptDetails()) }
     var sourceUri by rememberSaveable { mutableStateOf<Uri?>(null) }
     var showCamera by remember { mutableStateOf(false) }
     var expandedMenu by rememberSaveable { mutableStateOf<String?>(null) }
     var error by rememberSaveable { mutableStateOf<String?>(null) }
+    LaunchedEffect(staffProfileLoaded) {
+        if (staffProfileLoaded && !detailsInitialized) {
+            receiptDetails = receiptDetails.copy(businessUnit = staffProfile.businessUnit, costCentre1 = staffProfile.costCentre1, departmentCode = staffProfile.departmentCode)
+            detailsInitialized = true
+        }
+    }
     val requestCamera = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) showCamera = true else error = "Camera permission is required to capture a receipt."
     }
@@ -138,6 +152,11 @@ fun AddReceiptScreen(onBack: () -> Unit, onSaved: () -> Unit, viewModel: Receipt
             }
             OutlinedTextField(description, { if (it.length <= 2_000) description = it }, label = { Text("Description (optional)") }, supportingText = { Text("Up to 2,000 characters") }, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(note, { if (it.length <= 2_000) note = it }, label = { Text("Note (optional)") }, supportingText = { Text("Up to 2,000 characters") }, modifier = Modifier.fillMaxWidth())
+            OutlinedButton(onClick = { showAdditional = !showAdditional }, modifier = Modifier.fillMaxWidth()) { Text(if (showAdditional) "Hide additional report details" else "Add report details (optional)") }
+            if (showAdditional) {
+                Text("Staff profile values are copied as defaults and can be changed or cleared here.")
+                ReceiptDetailsForm(receiptDetails, { receiptDetails = it })
+            }
             error?.let { Text(it) }
             saveState.error?.let { Text(it) }
             Button(
@@ -160,7 +179,7 @@ fun AddReceiptScreen(onBack: () -> Unit, onSaved: () -> Unit, viewModel: Receipt
                         categoryId == null -> error = "Choose a classification."
                         else -> {
                             val selectedImage = sourceUri!!
-                            viewModel.saveReceipt(receiptName.trim().ifBlank { null }, normalizedAmount, currency, normalizedRate, receiptDate.trim(), categoryId!!, description.trim().ifBlank { null }, note.trim().ifBlank { null }, selectedImage, expenseAccountId) {
+                            viewModel.saveReceipt(receiptName.trim().ifBlank { null }, normalizedAmount, currency, normalizedRate, receiptDate.trim(), categoryId!!, description.trim().ifBlank { null }, note.trim().ifBlank { null }, selectedImage, expenseAccountId, receiptDetails) {
                                 if (selectedImage.scheme == "file" && selectedImage.path?.startsWith(File(context.filesDir, "receipt-staging").absolutePath) == true) File(selectedImage.path!!).delete()
                                 onSaved()
                             }
@@ -172,3 +191,8 @@ fun AddReceiptScreen(onBack: () -> Unit, onSaved: () -> Unit, viewModel: Receipt
         }
     }
 }
+
+private val receiptDetailsSaver = Saver<ReceiptDetails, String>(
+    save = { com.receiptclaims.android.data.local.ReportDetailsCodec.encodeReceiptDraft(it) },
+    restore = { com.receiptclaims.android.data.local.ReportDetailsCodec.decodeReceiptDraft(it) }
+)

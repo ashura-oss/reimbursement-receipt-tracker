@@ -11,6 +11,10 @@ import com.receiptclaims.android.data.local.ClaimEntity
 import com.receiptclaims.android.data.local.ReceiptEntity
 import com.receiptclaims.android.data.local.ReportFileEntity
 import com.receiptclaims.android.data.local.LocalSettingEntity
+import com.receiptclaims.android.data.local.ClaimDetails
+import com.receiptclaims.android.data.local.ReportDetailsCodec
+import com.receiptclaims.android.data.local.StaffProfile
+import com.receiptclaims.android.ui.home.StaffProfileViewModel
 import com.receiptclaims.android.data.repository.ReceiptRepository
 import com.receiptclaims.android.reports.LocalReportGenerator
 import com.receiptclaims.android.reports.ReportClaim
@@ -34,6 +38,7 @@ data class LocalClaimUi(val claim: ClaimEntity, val receipts: List<ReceiptEntity
 data class ClaimsUiState(
     val claims: List<LocalClaimUi> = emptyList(),
     val claimantName: String = "",
+    val staffProfile: StaffProfile = StaffProfile(),
     val loading: Boolean = false,
     val error: String? = null,
     val message: String? = null,
@@ -53,7 +58,9 @@ class ClaimsViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            database.localSettingDao().get(CLAIMANT_SETTING)?.let { _state.value = _state.value.copy(claimantName = it) }
+            val profile = database.localSettingDao().get(StaffProfileViewModel.PROFILE_KEY)?.let { runCatching { ReportDetailsCodec.decodeStaffProfile(it) }.getOrNull() } ?: StaffProfile()
+            val priorName = database.localSettingDao().get(CLAIMANT_SETTING)
+            _state.value = _state.value.copy(staffProfile = profile, claimantName = priorName ?: profile.name)
             database.claimDao().observeAll().collect { claims ->
                 val rows = claims.map { claim ->
                     LocalClaimUi(claim, receiptRepository.receiptsForClaim(claim.id), database.reportFileDao().forClaim(claim.id))
@@ -74,11 +81,11 @@ class ClaimsViewModel @Inject constructor(
         }
     }
 
-    fun createClaim(title: String, startDate: String, endDate: String, receipts: List<ReceiptEntity>, onCreated: () -> Unit) {
+    fun createClaim(title: String, startDate: String, endDate: String, receipts: List<ReceiptEntity>, details: ClaimDetails = ClaimDetails(), onCreated: () -> Unit) {
         viewModelScope.launch {
             _state.value = _state.value.copy(loading = true, error = null)
             database.localSettingDao().upsert(LocalSettingEntity(CLAIMANT_SETTING, _state.value.claimantName.trim()))
-            runCatching { receiptRepository.createClaim(title, startDate, endDate, receipts, _state.value.claimantName) }
+            runCatching { receiptRepository.createClaim(title, startDate, endDate, receipts, _state.value.claimantName, _state.value.staffProfile, details) }
                 .onSuccess { _state.value = _state.value.copy(loading = false, message = "Claim saved on this device."); onCreated() }
                 .onFailure { error -> if (error is CancellationException) throw error; _state.value = _state.value.copy(loading = false, error = error.message ?: "Unable to save claim.") }
         }
@@ -95,12 +102,15 @@ class ClaimsViewModel @Inject constructor(
                     "A receipt has no saved SGD exchange rate. Add the rate manually before generating this report."
                 }
                 val categories = database.categoryDao().all().associateBy { it.id }
+                val claimDetails = ReportDetailsCodec.decodeClaim(claim.claim.detailsJson)
                 val reportClaim = ReportClaim(
                     id = claim.claim.id,
                     title = claim.claim.title,
                     startDate = claim.claim.startDate,
                     endDate = claim.claim.endDate,
                     claimantName = claim.claim.claimantName,
+                    details = claimDetails,
+                    staffProfile = claimDetails.staffProfile ?: StaffProfile(),
                     receipts = claim.receipts.map { receipt ->
                         val category = categories[receipt.categoryId]
                         ReportReceipt(
@@ -115,7 +125,8 @@ class ClaimsViewModel @Inject constructor(
                             note = receipt.note,
                             imagePath = receipt.imagePath,
                             name = receipt.name,
-                            expenseAccountId = receipt.expenseAccountId
+                            expenseAccountId = receipt.expenseAccountId,
+                            details = ReportDetailsCodec.decodeReceipt(receipt.detailsJson, receipt.amount)
                         )
                     }
                 )
@@ -184,5 +195,5 @@ class ClaimsViewModel @Inject constructor(
             .onFailure { error -> if (error is CancellationException) throw error; _state.value = _state.value.copy(error = error.message ?: "Unable to save this report.") }
     }
 
-    companion object { private const val CLAIMANT_SETTING = "claimantName" }
+    companion object { private const val CLAIMANT_SETTING = ReportDetailsCodec.CLAIMANT_NAME_SETTING_KEY }
 }

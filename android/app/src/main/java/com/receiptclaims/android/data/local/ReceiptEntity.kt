@@ -1,5 +1,6 @@
 package com.receiptclaims.android.data.local
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 
 @Entity(tableName = "receipts", primaryKeys = ["ownerUserId", "clientReceiptId"])
@@ -20,7 +21,8 @@ data class ReceiptEntity(
     val status: String = STATUS_SAVED,
     val errorMessage: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
-    val expenseAccountId: String? = null
+    val expenseAccountId: String? = null,
+    @ColumnInfo(defaultValue = "'{}'") val detailsJson: String = "{}"
 ) {
     companion object {
         const val STATUS_SAVED = "SAVED"

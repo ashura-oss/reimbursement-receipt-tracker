@@ -11,6 +11,8 @@ import androidx.lifecycle.viewModelScope
 import com.receiptclaims.android.data.local.CategoryEntity
 import com.receiptclaims.android.data.local.ClaimDao
 import com.receiptclaims.android.data.local.ReceiptEntity
+import com.receiptclaims.android.data.local.ReceiptDetails
+import com.receiptclaims.android.data.local.StaffProfile
 import com.receiptclaims.android.data.repository.CategoryRepository
 import com.receiptclaims.android.data.repository.ReceiptRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -41,6 +43,10 @@ class ReceiptViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val categories: StateFlow<List<CategoryEntity>> = categoryRepository.observeCategories()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    private val _staffProfile = kotlinx.coroutines.flow.MutableStateFlow(StaffProfile())
+    val staffProfile: StateFlow<StaffProfile> = _staffProfile
+    private val _staffProfileLoaded = kotlinx.coroutines.flow.MutableStateFlow(false)
+    val staffProfileLoaded: StateFlow<Boolean> = _staffProfileLoaded
     val claimedReceiptKeys: StateFlow<Set<String>> = claimDao.observeClaimedReceiptKeys()
         .map { it.toSet() }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
@@ -48,6 +54,8 @@ class ReceiptViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             categoryRepository.ensureDefaults()
+            runCatching { repository.loadStaffProfile() }.getOrNull()?.let { _staffProfile.value = it }
+            _staffProfileLoaded.value = true
         }
     }
 
@@ -62,6 +70,7 @@ class ReceiptViewModel @Inject constructor(
         note: String?,
         sourceUri: Uri,
         expenseAccountId: String? = null,
+        details: ReceiptDetails = ReceiptDetails(),
         onSaved: () -> Unit
     ) {
         viewModelScope.launch {
@@ -70,7 +79,7 @@ class ReceiptViewModel @Inject constructor(
             runCatching {
                 val path = copyToPrivateStorage(sourceUri)
                 savedImagePath = path
-                repository.createReceipt(name, amount, currency, exchangeRate, receiptDate, categoryId, description, note, path, expenseAccountId)
+                repository.createReceipt(name, amount, currency, exchangeRate, receiptDate, categoryId, description, note, path, expenseAccountId, details)
             }.onSuccess { _saveState.value = SaveState(); onSaved() }
             .onFailure { error -> if (error is CancellationException) throw error; savedImagePath?.let { File(it).delete() }; _saveState.value = SaveState(error = error.message ?: "Unable to save receipt.") }
         }
@@ -94,6 +103,14 @@ class ReceiptViewModel @Inject constructor(
         viewModelScope.launch {
             runCatching { repository.setExpenseAccount(receipt.ownerUserId, receipt.clientReceiptId, expenseAccountId) }
                 .onFailure { if (it is CancellationException) throw it; _saveState.value = SaveState(error = it.message ?: "Unable to save the expense account.") }
+        }
+    }
+
+    fun updateReceiptDetails(receipt: ReceiptEntity, details: ReceiptDetails) {
+        viewModelScope.launch {
+            runCatching { repository.updateReceiptDetails(receipt.ownerUserId, receipt.clientReceiptId, details) }
+                .onSuccess { _saveState.value = SaveState() }
+                .onFailure { if (it is CancellationException) throw it; _saveState.value = SaveState(error = it.message ?: "Unable to save receipt details.") }
         }
     }
 

@@ -7,6 +7,10 @@ import com.receiptclaims.android.data.local.ClaimReceiptCrossRef
 import com.receiptclaims.android.data.local.ReceiptDao
 import com.receiptclaims.android.data.local.ReceiptEntity
 import com.receiptclaims.android.data.local.ExpenseAccounts
+import com.receiptclaims.android.data.local.ReceiptDetails
+import com.receiptclaims.android.data.local.ReportDetailsCodec
+import com.receiptclaims.android.data.local.StaffProfile
+import com.receiptclaims.android.data.local.ClaimDetails
 import kotlinx.coroutines.flow.Flow
 import java.math.BigDecimal
 import java.math.RoundingMode
@@ -26,6 +30,10 @@ class ReceiptRepository @Inject constructor(
 
     fun observeReceipts(): Flow<List<ReceiptEntity>> = dao.observeAll()
 
+    suspend fun loadStaffProfile(): StaffProfile? = database.localSettingDao().get("staffProfile")?.let {
+        ReportDetailsCodec.decodeStaffProfile(it)
+    }
+
     suspend fun createReceipt(
         name: String?,
         amount: String,
@@ -36,7 +44,8 @@ class ReceiptRepository @Inject constructor(
         description: String?,
         note: String?,
         imagePath: String,
-        expenseAccountId: String? = null
+        expenseAccountId: String? = null,
+        details: ReceiptDetails = ReceiptDetails()
     ): String {
         val parsedAmount = validatePositiveAmount(amount, "Amount")
         require(currency.matches(Regex("[A-Z]{3}"))) { "Choose a valid three-letter currency." }
@@ -47,6 +56,7 @@ class ReceiptRepository @Inject constructor(
         require((description?.length ?: 0) <= 2_000 && (note?.length ?: 0) <= 2_000) { "Description and note can each be at most 2,000 characters." }
         require((name?.length ?: 0) <= 120) { "Receipt name can be at most 120 characters." }
         require(expenseAccountId == null || ExpenseAccounts.find(expenseAccountId) != null) { "Choose a valid expense account." }
+        val cleanDetails = ReportDetailsCodec.encodeReceipt(details, parsedAmount.toPlainString())
         val clientId = UUID.randomUUID().toString()
         dao.upsert(ReceiptEntity(
             clientReceiptId = clientId,
@@ -62,12 +72,13 @@ class ReceiptRepository @Inject constructor(
             note = note,
             imagePath = imagePath,
             status = ReceiptEntity.STATUS_SAVED,
-            expenseAccountId = expenseAccountId
+            expenseAccountId = expenseAccountId,
+            detailsJson = cleanDetails
         ))
         return clientId
     }
 
-    suspend fun createClaim(title: String, startDate: String?, endDate: String?, receipts: List<ReceiptEntity>, claimantName: String): Long {
+    suspend fun createClaim(title: String, startDate: String?, endDate: String?, receipts: List<ReceiptEntity>, claimantName: String, staffProfile: StaffProfile = StaffProfile(), details: ClaimDetails = ClaimDetails()): Long {
         val cleanTitle = title.trim()
         require(cleanTitle.isNotEmpty() && cleanTitle.length <= 120) { "Enter a claim title up to 120 characters." }
         fun date(value: String?): String? = value?.trim()?.takeIf(String::isNotEmpty)?.also {
@@ -89,12 +100,15 @@ class ReceiptRepository @Inject constructor(
             BitmapFactory.decodeFile(image.absolutePath, dimensions)
             dimensions.outWidth > 0 && dimensions.outHeight > 0 && dimensions.outWidth.toLong() * dimensions.outHeight <= 40_000_000L
         }) { "Every receipt image must be readable and no larger than 40 megapixels." }
+        val profile = ReportDetailsCodec.validateStaffProfile(staffProfile)
+        val claimDetailsJson = ReportDetailsCodec.encodeClaim(details.copy(position = details.position ?: profile.position, staffProfile = profile))
+        receipts.forEach { ReportDetailsCodec.decodeReceipt(it.detailsJson, it.amount) }
         return database.withTransaction {
             receipts.forEach { receipt ->
                 val current = dao.findForUser(receipt.ownerUserId, receipt.clientReceiptId)
                 require(current == receipt && receipt.status == ReceiptEntity.STATUS_SAVED) { "A selected receipt changed. Refresh and try again." }
             }
-            val claimId = database.claimDao().insert(ClaimEntity(title = cleanTitle, startDate = start, endDate = end, claimantName = claimantName.trim()))
+            val claimId = database.claimDao().insert(ClaimEntity(title = cleanTitle, startDate = start, endDate = end, claimantName = claimantName.trim(), detailsJson = claimDetailsJson))
             database.claimDao().insertLinks(receipts.map { ClaimReceiptCrossRef(claimId, it.ownerUserId, it.clientReceiptId) })
             claimId
         }
@@ -130,6 +144,16 @@ class ReceiptRepository @Inject constructor(
             val receipt = dao.findForUser(ownerId, clientId) ?: error("Receipt was not found.")
             require(receipt.status == ReceiptEntity.STATUS_SAVED) { "Only unclaimed receipts can be edited." }
             require(dao.updateExpenseAccount(ownerId, clientId, expenseAccountId) == 1) { "Receipt changed before the expense account was saved." }
+        }
+    }
+
+    suspend fun updateReceiptDetails(ownerId: Int, clientId: String, details: ReceiptDetails) {
+        database.withTransaction {
+            require(!database.claimDao().isClaimed(ownerId, clientId)) { "Receipts in a local claim cannot be edited." }
+            val receipt = dao.findForUser(ownerId, clientId) ?: error("Receipt was not found.")
+            require(receipt.status == ReceiptEntity.STATUS_SAVED) { "Only unclaimed receipts can be edited." }
+            val json = ReportDetailsCodec.encodeReceipt(details, receipt.amount)
+            require(dao.updateDetails(ownerId, clientId, json) == 1) { "Receipt changed before details were saved." }
         }
     }
 

@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyColumn
@@ -30,6 +31,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.Modifier
@@ -37,6 +40,8 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.receiptclaims.android.data.local.ExpenseAccounts
+import com.receiptclaims.android.data.local.ReceiptDetails
+import com.receiptclaims.android.data.local.ReportDetailsCodec
 import coil.compose.AsyncImage
 import java.io.File
 
@@ -51,6 +56,9 @@ fun ReceiptListScreen(onBack: () -> Unit, onStorage: () -> Unit = {}, viewModel:
     var legacyToRelease by remember { mutableStateOf<com.receiptclaims.android.data.local.ReceiptEntity?>(null) }
     var receiptForRate by remember { mutableStateOf<com.receiptclaims.android.data.local.ReceiptEntity?>(null) }
     var rateValue by remember { mutableStateOf("") }
+    var receiptForDetails by remember { mutableStateOf<com.receiptclaims.android.data.local.ReceiptEntity?>(null) }
+    var editDetails by rememberSaveable(stateSaver = receiptDetailsSaver) { mutableStateOf(ReceiptDetails()) }
+    var editError by remember { mutableStateOf<String?>(null) }
     receiptForRate?.let { receipt ->
         AlertDialog(
             onDismissRequest = { receiptForRate = null },
@@ -72,6 +80,24 @@ fun ReceiptListScreen(onBack: () -> Unit, onStorage: () -> Unit = {}, viewModel:
             text = { Text("This receipt was marked claimed by the previous online app, but its claim details are not stored on this device. Releasing it allows it to be added to a new local claim.") },
             confirmButton = { TextButton(onClick = { viewModel.releaseLegacyClaim(receipt); legacyToRelease = null }) { Text("Make available") } },
             dismissButton = { TextButton(onClick = { legacyToRelease = null }) { Text("Cancel") } }
+        )
+    }
+    receiptForDetails?.let { receipt ->
+        AlertDialog(
+            onDismissRequest = { receiptForDetails = null },
+            title = { Text("Edit report details") },
+            text = { Column(Modifier.heightIn(max = 600.dp).verticalScroll(androidx.compose.foundation.rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("These details are stored on this device. Receipts already in a local claim are read-only.")
+                ReceiptDetailsForm(editDetails, { editDetails = it })
+                editError?.let { Text(it) }
+            } },
+            confirmButton = { TextButton(onClick = {
+                runCatching { ReportDetailsCodec.encodeReceipt(editDetails, receipt.amount) }.onSuccess {
+                    viewModel.updateReceiptDetails(receipt, editDetails)
+                    receiptForDetails = null
+                }.onFailure { editError = it.message ?: "Check the optional details." }
+            }) { Text("Save details") } },
+            dismissButton = { TextButton(onClick = { receiptForDetails = null }) { Text("Cancel") } }
         )
     }
     fullSizeImage?.let { image ->
@@ -143,6 +169,12 @@ fun ReceiptListScreen(onBack: () -> Unit, onStorage: () -> Unit = {}, viewModel:
                             } else {
                                 Text("Expense account: ${expenseAccount?.displayName ?: "Not selected"}")
                             }
+                            runCatching { ReportDetailsCodec.decodeReceipt(receipt.detailsJson, receipt.amount).displayLines() }.getOrDefault(emptyList()).forEach { Text(it) }
+                            if (canEditAccount) TextButton(onClick = {
+                                editDetails = runCatching { ReportDetailsCodec.decodeReceipt(receipt.detailsJson, receipt.amount) }.getOrDefault(ReceiptDetails())
+                                editError = null
+                                receiptForDetails = receipt
+                            }) { Text("Edit extra report details") }
                             receipt.description?.takeIf(String::isNotBlank)?.let { Text(it) }
                             Text("Status: ${if (inLocalClaim) "In a local claim" else receipt.status.toFriendlyStatus()}")
                             receipt.errorMessage?.let { Text(it) }
@@ -157,6 +189,11 @@ fun ReceiptListScreen(onBack: () -> Unit, onStorage: () -> Unit = {}, viewModel:
         }
     }
 }
+
+private val receiptDetailsSaver = Saver<ReceiptDetails, String>(
+    save = { ReportDetailsCodec.encodeReceiptDraft(it) },
+    restore = { ReportDetailsCodec.decodeReceiptDraft(it) }
+)
 
 private fun String.toFriendlyStatus(): String = when (this) {
     com.receiptclaims.android.data.local.ReceiptEntity.STATUS_SAVED -> "Saved on this device"

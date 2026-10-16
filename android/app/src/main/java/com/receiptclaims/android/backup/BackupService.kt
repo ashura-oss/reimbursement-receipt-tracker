@@ -11,6 +11,7 @@ import com.receiptclaims.android.data.local.ClaimReceiptCrossRef
 import com.receiptclaims.android.data.local.ExpenseAccounts
 import com.receiptclaims.android.data.local.LocalSettingEntity
 import com.receiptclaims.android.data.local.ReceiptEntity
+import com.receiptclaims.android.data.local.ReportDetailsCodec
 import com.receiptclaims.android.data.local.ReportFileEntity
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -317,6 +318,8 @@ class BackupService @Inject constructor(
         require(receiptArray.length() <= MAX_RECORDS) { "Backup contains too many receipts." }
         val receipts = receiptArray.toObjects { item ->
             val entity = item.toReceipt()
+            require(entity.detailsJson.length <= MAX_DETAILS_JSON_BYTES) { "Backup contains oversized receipt details." }
+            ReportDetailsCodec.decodeReceipt(entity.detailsJson, entity.amount)
             require(entity.ownerUserId >= 0 && entity.clientReceiptId.isNotBlank() && entity.clientReceiptId.length <= 200 && entity.currency.matches(Regex("[A-Z]{3}")) && entity.createdAt >= 0 && (entity.name?.length ?: 0) <= 120) { "Backup contains an invalid receipt." }
             require(entity.expenseAccountId == null || ExpenseAccounts.find(entity.expenseAccountId) != null) { "Backup contains an unknown expense account." }
             val amount = validPositiveMoney(entity.amount, MAX_AMOUNT, 6, "receipt amount")
@@ -341,6 +344,8 @@ class BackupService @Inject constructor(
         val claims = array("claims").toObjects { it.toClaim() }
         require(claims.size <= MAX_RECORDS && claims.map { it.id }.distinct().size == claims.size && claims.all { it.id != 0L && it.title.isNotBlank() && it.title.length <= 120 && it.claimantName.length <= 200 }) { "Backup contains invalid or duplicate claims." }
         claims.forEach {
+            require(it.detailsJson.length <= MAX_DETAILS_JSON_BYTES) { "Backup contains oversized claim details." }
+            ReportDetailsCodec.decodeClaim(it.detailsJson)
             validateDate(it.startDate)
             validateDate(it.endDate)
             require(it.createdAt >= 0 && (it.startDate == null || it.endDate == null || !LocalDate.parse(it.endDate).isBefore(LocalDate.parse(it.startDate)))) { "Backup contains invalid claim dates." }
@@ -365,6 +370,10 @@ class BackupService @Inject constructor(
         val settings = array("settings").toObjects { LocalSettingEntity(it.getString("key"), it.getString("value")) }
         require(settings.size <= MAX_RECORDS && settings.all { it.key.length <= 200 && it.value.length <= MAX_SETTING_VALUE }) { "Backup contains oversized settings." }
         require(settings.map { it.key }.distinct().size == settings.size && settings.all { it.key.isNotBlank() && it.key.length <= 200 && it.value.length <= MAX_SETTING_VALUE } && settings.none { isSensitiveKey(it.key) || isImportMarker(it.key) }) { "Backup contains invalid or sensitive settings." }
+        settings.filter { it.key == STAFF_PROFILE_SETTING }.forEach {
+            require(it.value.length <= MAX_DETAILS_JSON_BYTES) { "Backup contains oversized staff profile details." }
+            ReportDetailsCodec.decodeStaffProfile(it.value)
+        }
         val referenced = (receipts.mapNotNull { it.archivePath } + reports.mapNotNull { it.archivePath } + MANIFEST).toSet()
         require(archiveEntries == referenced) { "Backup contains unreferenced or unexpected files." }
         return Incoming(backupId, receipts, categories, claims, links, reports, settings, warnings)
@@ -441,17 +450,17 @@ class BackupService @Inject constructor(
     private fun ReceiptEntity.toJson(file: String?, missing: Boolean) = JSONObject().apply {
         put("clientReceiptId", clientReceiptId); put("ownerUserId", ownerUserId); put("serverId", serverId); put("amount", amount); put("currency", currency)
         put("exchangeRate", exchangeRate); put("sgdEquivalent", sgdEquivalent); put("receiptDate", receiptDate); put("categoryId", categoryId)
-        put("name", name); put("expenseAccountId", expenseAccountId); put("description", description); put("note", note); put("imagePath", ""); put("status", status); put("errorMessage", errorMessage); put("createdAt", createdAt)
+        put("name", name); put("expenseAccountId", expenseAccountId); put("description", description); put("note", note); put("detailsJson", detailsJson); put("imagePath", ""); put("status", status); put("errorMessage", errorMessage); put("createdAt", createdAt)
         put("file", file); put("fileMissing", missing)
     }
     private fun JSONObject.toReceipt() = ReceiptEntity(
         clientReceiptId = getString("clientReceiptId"), ownerUserId = getInt("ownerUserId"), serverId = optNullableString("serverId"), amount = getString("amount"), currency = getString("currency"),
         exchangeRate = optNullableString("exchangeRate"), sgdEquivalent = optNullableString("sgdEquivalent"), receiptDate = getString("receiptDate"), categoryId = getInt("categoryId"),
-        name = optNullableString("name"), expenseAccountId = optNullableString("expenseAccountId"), description = optNullableString("description"), note = optNullableString("note"), imagePath = "", status = optString("status", ReceiptEntity.STATUS_SAVED), errorMessage = optNullableString("errorMessage"), createdAt = getLong("createdAt")
+        name = optNullableString("name"), expenseAccountId = optNullableString("expenseAccountId"), description = optNullableString("description"), note = optNullableString("note"), detailsJson = optString("detailsJson", "{}"), imagePath = "", status = optString("status", ReceiptEntity.STATUS_SAVED), errorMessage = optNullableString("errorMessage"), createdAt = getLong("createdAt")
     )
     private fun CategoryEntity.toJson() = JSONObject().put("id", id).put("name", name).put("accountCode", accountCode)
-    private fun ClaimEntity.toJson() = JSONObject().put("id", id).put("title", title).put("startDate", startDate).put("endDate", endDate).put("claimantName", claimantName).put("createdAt", createdAt)
-    private fun JSONObject.toClaim() = ClaimEntity(id = getLong("id"), title = getString("title"), startDate = optNullableString("startDate"), endDate = optNullableString("endDate"), claimantName = getString("claimantName"), createdAt = getLong("createdAt"))
+    private fun ClaimEntity.toJson() = JSONObject().put("id", id).put("title", title).put("startDate", startDate).put("endDate", endDate).put("claimantName", claimantName).put("createdAt", createdAt).put("detailsJson", detailsJson)
+    private fun JSONObject.toClaim() = ClaimEntity(id = getLong("id"), title = getString("title"), startDate = optNullableString("startDate"), endDate = optNullableString("endDate"), claimantName = getString("claimantName"), createdAt = getLong("createdAt"), detailsJson = optString("detailsJson", "{}"))
     private fun ClaimReceiptCrossRef.toJson() = JSONObject().put("claimId", claimId).put("receiptOwnerUserId", receiptOwnerUserId).put("receiptClientReceiptId", receiptClientReceiptId)
     private fun JSONObject.toLink() = ClaimReceiptCrossRef(getLong("claimId"), getInt("receiptOwnerUserId"), getString("receiptClientReceiptId"))
     private fun ReportFileEntity.toJson(file: String?, missing: Boolean) = JSONObject().put("id", id).put("claimId", claimId).put("type", type).put("name", name).put("mimeType", mimeType).put("path", "").put("createdAt", createdAt).put("file", file).put("fileMissing", missing)
@@ -469,6 +478,8 @@ class BackupService @Inject constructor(
         private const val MAX_RECORDS = 10_000
         private const val MAX_MANIFEST_BYTES = 8L * 1024 * 1024
         private const val MAX_SETTING_VALUE = 16_384
+        private const val MAX_DETAILS_JSON_BYTES = 16_384
+        private const val STAFF_PROFILE_SETTING = ReportDetailsCodec.STAFF_PROFILE_SETTING_KEY
         private const val MAX_IMAGE_BYTES = 10L * 1024 * 1024
         private const val MAX_REPORT_BYTES = 50L * 1024 * 1024
         private val MAX_AMOUNT = BigDecimal("1000000000")

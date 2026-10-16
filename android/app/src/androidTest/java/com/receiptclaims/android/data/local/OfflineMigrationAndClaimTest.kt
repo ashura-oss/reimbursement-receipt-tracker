@@ -35,7 +35,7 @@ class OfflineMigrationAndClaimTest {
         old.close()
 
         database = Room.databaseBuilder(context, AppDatabase::class.java, name)
-            .addMigrations(DatabaseModule.MIGRATION_2_3, DatabaseModule.MIGRATION_3_4, DatabaseModule.MIGRATION_4_5, DatabaseModule.MIGRATION_5_6)
+            .addMigrations(DatabaseModule.MIGRATION_2_3, DatabaseModule.MIGRATION_3_4, DatabaseModule.MIGRATION_4_5, DatabaseModule.MIGRATION_5_6, DatabaseModule.MIGRATION_6_7)
             .build()
         val rows = runBlocking { database!!.receiptDao().allReceipts() }
         assertEquals(2, rows.size)
@@ -45,6 +45,7 @@ class OfflineMigrationAndClaimTest {
         assertEquals("/private/one.jpg", saved.imagePath)
         assertNull(saved.name)
         assertNull(saved.expenseAccountId)
+        assertEquals("{}", saved.detailsJson)
         assertEquals("1", saved.exchangeRate)
         assertEquals("12.50", saved.sgdEquivalent)
         val legacyClaimed = rows.single { it.ownerUserId == 20 }
@@ -91,6 +92,32 @@ class OfflineMigrationAndClaimTest {
         repository.createClaim("Travel", null, null, listOf(receipt), "A. Person")
         assertTrue(runCatching { repository.setExpenseAccount(10, receipt.clientReceiptId, "motor_vehicle") }.isFailure)
         assertNull(db.receiptDao().findForUser(10, receipt.clientReceiptId)?.expenseAccountId)
+    }
+
+    @Test fun reportDetailsCodecRoundTripsAndRejectsGstAndExponentAbuse() {
+        val details = ReceiptDetails(travelStart = "23:30", travelEnd = "01:15", fromLocation = "Lab", toLocation = "Airport", purpose = "Conference", gstAmount = "1.5", businessUnit = "Scientific", costCentre1 = "CC-4", departmentCode = "D7")
+        assertEquals(details, ReportDetailsCodec.decodeReceipt(ReportDetailsCodec.encodeReceipt(details, "15.00"), "15.00"))
+        val claim = ClaimDetails(paymentMethod = "Cheque", chequeNumber = "1234", cashAdvance = "12.5", submittedBy = "Alex", submittedDate = "2026-10-01", submittedSignature = listOf(SignatureStroke(listOf(NormalizedPoint(0f, 0f), NormalizedPoint(1f, 1f)))), staffProfile = StaffProfile("Alex", "Manager", "Scientific", "CC-4", "D7"))
+        assertEquals(claim, ReportDetailsCodec.decodeClaim(ReportDetailsCodec.encodeClaim(claim)))
+        assertEquals(ReceiptDetails(), ReportDetailsCodec.decodeReceipt("{}"))
+        assertTrue(runCatching { ReportDetailsCodec.decodeReceipt("{\"gstAmount\":\"2\"}", "1") }.isFailure)
+        assertTrue(runCatching { ReportDetailsCodec.decodeClaim("{\"cashAdvance\":\"1e999999999\"}") }.isFailure)
+    }
+
+    @Test fun newClaimsSnapshotProfileAndOptionalDetails() = runBlocking {
+        database = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).build()
+        val db = database!!
+        val receipt = receipt(owner = 10, amount = "8")
+        db.receiptDao().upsert(receipt)
+        val profile = StaffProfile("Sam", "Supervisor", "Service", "CC-9", "OPS")
+        val details = ClaimDetails(paymentMethod = "PayNow", paynowReference = "TX-9", cashAdvance = "15.00")
+        val claimId = ReceiptRepository(db.receiptDao(), db).createClaim("Trip", null, null, listOf(receipt), "Sam", profile, details)
+        val saved = db.claimDao().all().single { it.id == claimId }
+        val decoded = ReportDetailsCodec.decodeClaim(saved.detailsJson)
+        assertEquals(profile, decoded.staffProfile)
+        assertEquals("TX-9", decoded.paynowReference)
+        assertEquals("15", decoded.cashAdvance)
+        assertEquals(StaffProfile(), ReportDetailsCodec.decodeClaim("{}").staffProfile ?: StaffProfile())
     }
 
     private fun receipt(owner: Int, amount: String): ReceiptEntity {

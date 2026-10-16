@@ -9,10 +9,16 @@ import com.receiptclaims.android.data.local.AppDatabase
 import com.receiptclaims.android.data.local.CategoryEntity
 import com.receiptclaims.android.data.local.ClaimEntity
 import com.receiptclaims.android.data.local.ClaimReceiptCrossRef
+import com.receiptclaims.android.data.local.ClaimDetails
 import com.receiptclaims.android.data.local.ExpenseAccounts
 import com.receiptclaims.android.data.local.LocalSettingEntity
+import com.receiptclaims.android.data.local.NormalizedPoint
 import com.receiptclaims.android.data.local.ReceiptEntity
+import com.receiptclaims.android.data.local.ReceiptDetails
+import com.receiptclaims.android.data.local.ReportDetailsCodec
 import com.receiptclaims.android.data.local.ReportFileEntity
+import com.receiptclaims.android.data.local.SignatureStroke
+import com.receiptclaims.android.data.local.StaffProfile
 import com.receiptclaims.android.storage.ReceiptKey
 import com.receiptclaims.android.storage.StorageRepository
 import kotlinx.coroutines.runBlocking
@@ -103,6 +109,91 @@ class BackupServiceTest {
         BackupService(targetDb, context).importFrom(Uri.fromFile(validArchive))
         assertEquals(setOf(null, "meals_allowances"), targetDb.receiptDao().allReceipts().map { it.expenseAccountId }.toSet())
         validArchive.delete(); legacyArchive.delete(); unknownArchive.delete()
+    }
+
+    @Test fun richReportDetailsAndSignaturesRoundTripAndLegacyDetailsDefaultEmpty() = runBlocking<Unit> {
+        sourceDb.categoryDao().upsertAll(listOf(CategoryEntity(3, "Travel")))
+        val receiptDetails = ReportDetailsCodec.encodeReceipt(
+            ReceiptDetails(travelStart = "09:30", travelEnd = "10:00", fromLocation = "Office", toLocation = "Airport", purpose = "Client visit", gstAmount = "9.00", businessUnit = "Scientific"),
+            grossAmount = "100.00"
+        )
+        val signature = listOf(SignatureStroke(listOf(NormalizedPoint(0.1f, 0.2f), NormalizedPoint(0.8f, 0.9f))))
+        val claimDetails = ReportDetailsCodec.encodeClaim(ClaimDetails(
+            position = "Manager", paymentMethod = "Cash", cashAdvance = "300.00", submittedBy = "Alex", submittedDate = "2026-10-15",
+            submittedSignature = signature, checkedSignature = signature,
+            staffProfile = StaffProfile("Alex", "Manager", "Scientific", "CC-1", "D-1")
+        ))
+        val profile = ReportDetailsCodec.encodeStaffProfile(StaffProfile("Alex", "Manager", "Scientific", "CC-1", "D-1"))
+        sourceDb.receiptDao().upsert(ReceiptEntity("metadata", 0, amount = "100.00", receiptDate = "2026-10-15", categoryId = 3, detailsJson = receiptDetails))
+        sourceDb.claimDao().upsert(ClaimEntity(id = 3, title = "Metadata claim", createdAt = 300, detailsJson = claimDetails))
+        sourceDb.claimDao().insertLinks(listOf(ClaimReceiptCrossRef(3, 0, "metadata")))
+        sourceDb.localSettingDao().upsert(LocalSettingEntity("staffProfile", profile))
+
+        val archive = File(context.cacheDir, "details-${UUID.randomUUID()}.zip")
+        val legacy = File(context.cacheDir, "details-legacy-${UUID.randomUUID()}.zip")
+        BackupService(sourceDb, context).exportTo(Uri.fromFile(archive))
+        rewriteManifest(archive, legacy) { manifest ->
+            manifest.getJSONArray("receipts").getJSONObject(0).remove("detailsJson")
+            manifest.getJSONArray("claims").getJSONObject(0).remove("detailsJson")
+            manifest.getJSONArray("settings").let { settings ->
+                for (i in settings.length() - 1 downTo 0) if (settings.getJSONObject(i).getString("key") == "staffProfile") settings.remove(i)
+            }
+        }
+
+        BackupService(targetDb, context).importFrom(Uri.fromFile(archive))
+        val restoredReceipt = targetDb.receiptDao().allReceipts().single()
+        val restoredClaim = targetDb.claimDao().all().single()
+        assertEquals(receiptDetails, restoredReceipt.detailsJson)
+        assertEquals(claimDetails, restoredClaim.detailsJson)
+        assertEquals(profile, targetDb.localSettingDao().get("staffProfile"))
+        assertEquals(ReceiptDetails(travelStart = "09:30", travelEnd = "10:00", fromLocation = "Office", toLocation = "Airport", purpose = "Client visit", gstAmount = "9", businessUnit = "Scientific"), ReportDetailsCodec.decodeReceipt(restoredReceipt.detailsJson, restoredReceipt.amount))
+        assertEquals(signature, ReportDetailsCodec.decodeClaim(restoredClaim.detailsJson).submittedSignature)
+        assertEquals(StaffProfile("Alex", "Manager", "Scientific", "CC-1", "D-1"), ReportDetailsCodec.decodeClaim(restoredClaim.detailsJson).staffProfile)
+
+        targetDb.receiptDao().deleteAll()
+        targetDb.claimDao().deleteAllLinks()
+        targetDb.claimDao().deleteAllClaims()
+        targetDb.localSettingDao().deleteAll()
+        BackupService(targetDb, context).importFrom(Uri.fromFile(legacy))
+        assertEquals("{}", targetDb.receiptDao().allReceipts().single().detailsJson)
+        assertEquals("{}", targetDb.claimDao().all().single().detailsJson)
+        assertEquals(null, targetDb.localSettingDao().get("staffProfile"))
+        archive.delete(); legacy.delete()
+    }
+
+    @Test fun malformedReportMetadataIsRejectedWithoutChangingDatabase() = runBlocking<Unit> {
+        sourceDb.categoryDao().upsertAll(listOf(CategoryEntity(6, "Travel")))
+        sourceDb.receiptDao().upsert(ReceiptEntity("valid-source", 0, amount = "100.00", receiptDate = "2026-10-15", categoryId = 6))
+        sourceDb.claimDao().upsert(ClaimEntity(id = 6, title = "Valid source", createdAt = 600))
+        sourceDb.claimDao().insertLinks(listOf(ClaimReceiptCrossRef(6, 0, "valid-source")))
+        sourceDb.localSettingDao().upsert(LocalSettingEntity("currency", "SGD"))
+        targetDb.categoryDao().upsertAll(listOf(CategoryEntity(77, "Keep")))
+        val existingReceipt = ReceiptEntity("keep-existing", 0, amount = "1.00", receiptDate = "2026-10-14", categoryId = 77, createdAt = 770)
+        targetDb.receiptDao().upsert(existingReceipt)
+        targetDb.localSettingDao().upsert(LocalSettingEntity("currency", "EUR"))
+        val validArchive = File(context.cacheDir, "valid-metadata-${UUID.randomUUID()}.zip")
+        val malformedReceipt = File(context.cacheDir, "invalid-receipt-details-${UUID.randomUUID()}.zip")
+        val malformedClaim = File(context.cacheDir, "invalid-claim-details-${UUID.randomUUID()}.zip")
+        val malformedProfile = File(context.cacheDir, "invalid-profile-${UUID.randomUUID()}.zip")
+        BackupService(sourceDb, context).exportTo(Uri.fromFile(validArchive))
+        rewriteManifest(validArchive, malformedReceipt) { manifest ->
+            manifest.getJSONArray("receipts").getJSONObject(0).put("detailsJson", "{\"gstAmount\":\"101\"}")
+        }
+        rewriteManifest(validArchive, malformedClaim) { manifest ->
+            manifest.getJSONArray("claims").getJSONObject(0).put("detailsJson", "{\"cashAdvance\":\"-1\"}")
+        }
+        rewriteManifest(validArchive, malformedProfile) { manifest ->
+            manifest.getJSONArray("settings").put(JSONObject().put("key", "staffProfile").put("value", "{\"businessUnit\":\"Unknown BU\"}"))
+        }
+
+        listOf(malformedReceipt, malformedClaim, malformedProfile).forEach { badArchive ->
+            val failure = runCatching { BackupService(targetDb, context).importFrom(Uri.fromFile(badArchive)) }.exceptionOrNull()
+            assertTrue("Malformed metadata in ${badArchive.name} should reject restore", failure != null)
+            assertEquals(listOf(existingReceipt), targetDb.receiptDao().allReceipts())
+            assertTrue(targetDb.claimDao().all().isEmpty())
+            assertEquals("EUR", targetDb.localSettingDao().get("currency"))
+        }
+        validArchive.delete(); malformedReceipt.delete(); malformedClaim.delete(); malformedProfile.delete()
     }
 
     @Test fun conflictingReceiptIsRemappedAndUnsafeArchiveDoesNotChangeDatabase() = runBlocking<Unit> {
@@ -203,6 +294,13 @@ class BackupServiceTest {
     }
 
     private fun rewriteReceiptAccountId(source: File, destination: File, value: String?) {
+        rewriteManifest(source, destination) { manifest ->
+            val receipt = manifest.getJSONArray("receipts").getJSONObject(0)
+            if (value == null) receipt.remove("expenseAccountId") else receipt.put("expenseAccountId", value)
+        }
+    }
+
+    private fun rewriteManifest(source: File, destination: File, transform: (JSONObject) -> Unit) {
         ZipInputStream(source.inputStream()).use { input ->
             ZipOutputStream(destination.outputStream()).use { output ->
                 while (true) {
@@ -211,8 +309,7 @@ class BackupServiceTest {
                     output.putNextEntry(ZipEntry(entry.name))
                     if (entry.name == "manifest.json") {
                         val manifest = JSONObject(bytes.toString(Charsets.UTF_8))
-                        val receipt = manifest.getJSONArray("receipts").getJSONObject(0)
-                        if (value == null) receipt.remove("expenseAccountId") else receipt.put("expenseAccountId", value)
+                        transform(manifest)
                         output.write(manifest.toString().toByteArray(Charsets.UTF_8))
                     } else output.write(bytes)
                     output.closeEntry()
